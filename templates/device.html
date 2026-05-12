@@ -1,0 +1,117 @@
+{% extends 'base.html' %}
+{% block title %} — Device{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h1 class="panel-title">Device</h1>
+      <p class="panel-sub">Connection, identification, and runtime mode.</p>
+    </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-ghost" data-action="scan">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="9" cy="9" r="5.5"/>
+          <path d="M13 13l4 4"/>
+        </svg>
+        <span>Scan</span>
+      </button>
+    </div>
+  </header>
+
+  {% if status.mock_mode %}
+    <div class="info-card">
+      <p class="info-empty">
+        Running on the in-process <strong>mock device</strong> — no real hardware data to display.
+        Switch to <strong>Hardware</strong> below to connect a real PP8K.
+      </p>
+    </div>
+  {% else %}
+    <div class="info-grid">
+      <div class="info-card">
+        <h3 class="info-title">Identification</h3>
+        {% if status.connected and status.info %}
+          <dl class="kv">
+            <dt>Product</dt><dd>{{ status.info.product }}</dd>
+            <dt>Firmware</dt><dd>{{ status.info.firmware }}</dd>
+            <dt>Revision</dt><dd>{{ status.info.revision }}</dd>
+            <dt>Buffer</dt><dd>{{ status.info.buffer_kb }} KB</dd>
+            <dt>Max res</dt><dd>{{ status.info.hres_max }} × {{ status.info.vres_max }}</dd>
+          </dl>
+        {% else %}
+          <p class="info-empty">{{ status.error or 'Not connected.' }}</p>
+        {% endif %}
+      </div>
+
+      <div class="info-card">
+        <h3 class="info-title">Mode</h3>
+        {% if status.connected and status.mode %}
+          <dl class="kv">
+            <dt>Active slot</dt><dd>{{ status.mode.film_number }}</dd>
+            <dt>Resolution</dt><dd>{{ status.mode.hres }} × {{ status.mode.vres }}</dd>
+            <dt>Camera back</dt><dd>{{ status.mode.camera_back }}</dd>
+            <dt>Luminance</dt><dd>{{ status.mode.lum_rgb | join(', ') }}</dd>
+            <dt>Color balance</dt><dd>{{ status.mode.cbal_rgb | join(', ') }}</dd>
+            <dt>Exposure</dt><dd>{{ status.mode.etime_rgb | join(', ') }}</dd>
+          </dl>
+        {% else %}
+          <p class="info-empty">No mode data available.</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">Connection</h2>
+      <p class="panel-sub">Pick how piPalette talks to the recorder. Changes are applied immediately.</p>
+    </div>
+  </header>
+
+  <form class="form" data-config-form>
+    <div class="form-row">
+      <label class="form-label">Mode</label>
+      <div class="seg">
+        <label class="seg-item">
+          <input type="radio" name="mock_mode" value="false" {{ 'checked' if not config.mock_mode }}>
+          <span>Hardware</span>
+        </label>
+        <label class="seg-item">
+          <input type="radio" name="mock_mode" value="true" {{ 'checked' if config.mock_mode }}>
+          <span>Mock</span>
+        </label>
+      </div>
+      <p class="form-hint">
+        {% if status.connected %}
+          Detected: <strong>{{ status.display }}</strong>
+        {% elif config.mock_mode %}
+          Using the in-process mock device for development.
+        {% else %}
+          {{ status.error or 'No device connected.' }}
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="form-row" {{ 'hidden' if config.mock_mode }}>
+      <label class="form-label" for="target">Target</label>
+      <input class="input" id="target" name="target"
+             placeholder="auto — Scan to discover"
+             value="{{ config.target if config.target is not none else '' }}">
+      <p class="form-hint">SCSI ID for PiSCSI HAT (e.g. <code>4</code>), or a <code>/dev/sg*</code> path. Leave blank and press Scan to auto-detect.</p>
+    </div>
+
+  </form>
+</section>
+
+<section class="panel" id="scan-results-panel" hidden>
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">Scan results</h2>
+      <p class="panel-sub">Click a result to apply it as the active transport.</p>
+    </div>
+  </header>
+  <div class="scan-results" id="scan-results"></div>
+</section>
+{% endblock %}

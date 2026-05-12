@@ -1,0 +1,39 @@
+<div class="brand">
+  <span class="brand-mark">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="12" cy="12" r="9"/>
+      <circle cx="12" cy="12" r="4.5"/>
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
+    </svg>
+  </span>
+  <span class="brand-name">piPalette</span>
+</div>
+
+<div class="device-pill {{ 'is-connected' if status.connected else 'is-offline' }}">
+  <span class="device-dot"></span>
+  {% if status.connected and status.mock_mode %}
+    <span class="device-product">Mock</span>
+  {% elif status.connected and status.info %}
+    <span class="device-product">{{ status.info.product }}</span>
+    <span class="device-meta">fw {{ status.info.firmware }}</span>
+  {% else %}
+    <span class="device-product">No device</span>
+    {% if status.error %}<span class="device-meta device-error" title="{{ status.error }}">offline</span>{% endif %}
+  {% endif %}
+</div>
+
+<div class="topbar-actions">
+  <button type="button" class="btn btn-ghost" data-action="scan" title="Scan for connected ProPalette devices">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+      <circle cx="9" cy="9" r="5.5"/>
+      <path d="M13 13l4 4"/>
+    </svg>
+    <span>Scan</span>
+  </button>
+  <button type="button" class="btn btn-ghost" data-action="refresh-status" title="Refresh device status">
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+      <path d="M16 4v4h-4"/>
+      <path d="M16 8a6 6 0 1 0-1.6 5"/>
+    </svg>
+  </button>
+</div>

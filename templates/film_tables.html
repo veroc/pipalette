@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %} — Film Tables{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h1 class="panel-title">Film Tables</h1>
+      <p class="panel-sub">Persistent storage for uploaded FLMs.</p>
+    </div>
+  </header>
+
+  <div class="dropzone" data-dropzone>
+    <input type="file" id="flm-upload" multiple accept=".flm,.FLM" hidden>
+    <label for="flm-upload" class="dropzone-inner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M12 16V4M7 9l5-5 5 5"/>
+        <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>
+      </svg>
+      <span class="dropzone-title">Drop .FLM files here</span>
+      <span class="dropzone-sub">or click to choose</span>
+    </label>
+  </div>
+
+  <div class="film-tables-list" id="film-tables-list">
+    {% if profiles %}
+      {% for profile in profiles %}
+        {% include 'partials/film_table_row.html' %}
+      {% endfor %}
+    {% else %}
+      <div class="empty-state">No film tables yet — upload an FLM to get started.</div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

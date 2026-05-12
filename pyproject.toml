@@ -1,0 +1,18 @@
+[project]
+name = "pipalette"
+version = "0.1.0"
+description = "Web UI for the Polaroid ProPalette 8000 film recorder, built on pp8k"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "Flask>=3.0",
+    "pp8k",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pipalette*"]

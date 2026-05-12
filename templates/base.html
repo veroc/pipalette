@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>piPalette{% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body data-view="{{ view }}">
+
+  <header class="topbar">
+    {% include 'partials/topbar.html' %}
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <nav>
+        <a href="{{ url_for('rolls_page') }}" class="nav-item {{ 'is-active' if view == 'rolls' }}">
+          <span class="nav-icon">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3.5" y="5" width="13" height="10" rx="1"/>
+              <path d="M3.5 8h13M6 5v10M14 5v10"/>
+            </svg>
+          </span>
+          <span>Rolls</span>
+        </a>
+        <a href="{{ url_for('film_tables_page') }}" class="nav-item {{ 'is-active' if view == 'film-tables' }}">
+          <span class="nav-icon">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M3 4.5h14v11H3z"/>
+              <path d="M3 8h14"/>
+              <path d="M7 8v7.5"/>
+            </svg>
+          </span>
+          <span>Film Tables</span>
+        </a>
+        <a href="{{ url_for('device_page') }}" class="nav-item {{ 'is-active' if view == 'device' }}">
+          <span class="nav-icon">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+              <circle cx="10" cy="10" r="7"/>
+              <circle cx="10" cy="10" r="2.5"/>
+              <path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2"/>
+            </svg>
+          </span>
+          <span>Device</span>
+        </a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="sidebar-foot-row">
+          <span class="sidebar-foot-label">Connection</span>
+          <span class="sidebar-foot-value">{{ status.display or '—' }}</span>
+        </div>
+        {% if storage %}
+          <div class="sidebar-foot-row">
+            <span class="sidebar-foot-label">Data</span>
+            <span class="sidebar-foot-value">{{ storage.data_label }}</span>
+          </div>
+          <div class="sidebar-foot-row disk-{{ storage.level }}">
+            <span class="sidebar-foot-label">Disk free</span>
+            <span class="sidebar-foot-value">{{ storage.disk_free_label }} / {{ storage.disk_total_label }}</span>
+          </div>
+        {% endif %}
+      </div>
+    </aside>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

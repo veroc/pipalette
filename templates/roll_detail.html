@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %} — {{ roll.name }}{% endblock %}
+
+{% block content %}
+<section class="panel" data-roll-id="{{ roll.id }}">
+  <header class="panel-head">
+    <div>
+      <div class="crumbs"><a href="{{ url_for('rolls_page') }}">Rolls</a> <span>/</span> <span>{{ roll.name }}</span></div>
+      <h1 class="panel-title roll-title" data-action="edit-name" tabindex="0" title="Click to rename">{{ roll.name }}</h1>
+      {% set filter_name = {1: 'Green', 2: 'Red', 3: 'Blue'}.get(roll.bw_filter) %}
+      <p class="panel-sub">
+        {{ roll.profile_name }} <span class="dot-sep">·</span>
+        {{ roll.camera_type }} <span class="dot-sep">·</span>
+        {% if roll.is_bw %}B&amp;W{% if filter_name %} ({{ filter_name }} filter){% endif %}{% else %}Color{% endif %}
+        <span class="dot-sep">·</span>
+        aspect {{ roll.aspect_w }}:{{ roll.aspect_h }}
+        <span class="dot-sep">·</span>
+        {{ roll.frames | length }} frame{{ '' if roll.frames | length == 1 else 's' }}
+        <span class="dot-sep">·</span>
+        {{ roll_size_label }}
+      </p>
+    </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-ghost btn-danger" data-action="delete-roll">Delete roll</button>
+    </div>
+  </header>
+
+  <div class="roll-opts">
+    <div class="opt-row">
+      <label class="form-label" for="opt-skip-cal">Calibration</label>
+      <label class="check">
+        <input type="checkbox" id="opt-skip-cal" data-roll-opt="skip_calibration" {{ 'checked' if roll.skip_calibration }}>
+        <span>Skip recalibration between continuous frames</span>
+      </label>
+      <p class="form-hint">First frame always calibrates. Stop/pause/error forces re-cal on resume.</p>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">Frames</h2>
+      <p class="panel-sub">Drag to reorder. Click a frame to edit its settings.</p>
+    </div>
+  </header>
+
+  <div class="dropzone" data-dropzone>
+    <input type="file" id="frame-upload" multiple accept=".jpg,.jpeg,.png,.tif,.tiff,.bmp" hidden>
+    <label for="frame-upload" class="dropzone-inner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <path d="M12 16V4M7 9l5-5 5 5"/>
+        <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>
+      </svg>
+      <span class="dropzone-title">Drop image files here</span>
+      <span class="dropzone-sub">JPEG · PNG · TIFF · BMP</span>
+    </label>
+  </div>
+
+  <div class="frame-grid" id="frame-grid" style="--frame-aspect: {{ roll.aspect_w }} / {{ roll.aspect_h }};">
+    {% for f in roll.frames %}
+      {% include 'partials/frame_card.html' %}
+    {% endfor %}
+    {% if not roll.frames %}
+      <div class="empty-state grid-span">No frames yet — upload images to get started.</div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

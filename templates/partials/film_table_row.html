@@ -1,0 +1,17 @@
+<div class="film-table-row" data-profile-id="{{ profile.id }}">
+  <div class="film-table-row-main">
+    <div class="film-table-row-name">{{ profile.name }}</div>
+    <div class="film-table-row-meta">
+      <span>{{ profile.camera_type }}</span>
+      <span class="dot-sep">·</span>
+      <span>{% if profile.is_bw %}B&amp;W{% if profile.bw_filter_name %} ({{ profile.bw_filter_name }}){% endif %}{% else %}Color{% endif %}</span>
+      <span class="dot-sep">·</span>
+      <span class="meta-muted">{{ profile.original_name }}</span>
+    </div>
+  </div>
+  <div class="film-table-row-actions">
+    <button type="button" class="btn btn-ghost btn-sm btn-danger" data-action="delete-profile" data-profile-id="{{ profile.id }}">
+      Delete
+    </button>
+  </div>
+</div>

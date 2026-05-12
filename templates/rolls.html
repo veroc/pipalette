@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %} — Rolls{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h1 class="panel-title">Rolls</h1>
+      <p class="panel-sub">
+        A roll is a queue of frames to expose against one snapshotted FLM.
+        The FLM is copied into the roll on creation — later film-table edits won't affect it.
+      </p>
+    </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-primary" data-action="new-roll">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M10 4v12M4 10h12"/>
+        </svg>
+        <span>New roll</span>
+      </button>
+    </div>
+  </header>
+
+  {% if rolls %}
+    <div class="roll-list">
+      {% for r in rolls %}
+        <a class="roll-card" href="{{ url_for('roll_detail_page', roll_id=r.id) }}">
+          <div class="roll-card-head">
+            <span class="roll-card-name">{{ r.name }}</span>
+            <span class="badge badge-status badge-status-{{ r.status }}">{{ r.status }}</span>
+          </div>
+          {% set filter_name = {1: 'Green', 2: 'Red', 3: 'Blue'}.get(r.bw_filter) %}
+          <div class="roll-card-meta">
+            <span>{{ r.profile_name }}</span>
+            <span class="dot-sep">·</span>
+            <span>{{ r.camera_type }}</span>
+            <span class="dot-sep">·</span>
+            <span>{% if r.is_bw %}B&amp;W{% if filter_name %} ({{ filter_name }}){% endif %}{% else %}Color{% endif %}</span>
+          </div>
+          <div class="roll-card-counts">
+            <span class="count-pill" title="frames in this roll">{{ r.frame_count }} frame{{ '' if r.frame_count == 1 else 's' }}</span>
+            {% if r.counts.done %}<span class="count-pill count-done">{{ r.counts.done }} done</span>{% endif %}
+            {% if r.counts.failed %}<span class="count-pill count-failed">{{ r.counts.failed }} failed</span>{% endif %}
+            {% if r.counts.exposing %}<span class="count-pill count-exposing">{{ r.counts.exposing }} exposing</span>{% endif %}
+          </div>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">No rolls yet — create one to start queueing frames.</div>
+  {% endif %}
+</section>
+
+<template id="tmpl-new-roll-form">
+  <form class="form">
+    <div class="form-row">
+      <label class="form-label" for="new-roll-name">Name</label>
+      <input class="input" id="new-roll-name" name="name" placeholder="e.g. Client order #42" required>
+    </div>
+    <div class="form-row">
+      <label class="form-label" for="new-roll-profile">Film table</label>
+      <select class="input" id="new-roll-profile" name="profile_id" required>
+        {% for p in profiles %}
+          <option value="{{ p.id }}"
+                  data-is-bw="{{ 'true' if p.is_bw else 'false' }}"
+                  data-bw-filter="{{ p.bw_filter if p.bw_filter in [1, 2, 3] else 1 }}">
+            {{ p.name }} — {{ p.camera_type }} · {{ 'B&W' if p.is_bw else 'Color' }}
+          </option>
+        {% endfor %}
+      </select>
+      {% if not profiles %}
+        <p class="form-hint">No film tables yet — upload an FLM first.</p>
+      {% endif %}
+    </div>
+
+    <div class="form-row" data-bw-filter-row hidden>
+      <label class="form-label">B&amp;W filter</label>
+      <div class="seg">
+        {% for value, label in [(1, 'Green'), (2, 'Red'), (3, 'Blue')] %}
+          <label class="seg-item">
+            <input type="radio" name="bw_filter" value="{{ value }}">
+            <span>{{ label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+      <p class="form-hint">Filter color used during single-pass B&amp;W exposure. Locked once the roll is created.</p>
+    </div>
+  </form>
+</template>
+{% endblock %}

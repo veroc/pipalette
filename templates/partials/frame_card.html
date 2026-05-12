@@ -1,0 +1,73 @@
+{# Renders one frame card in the roll detail view.
+   Variables: roll, f (frame dict). #}
+<article class="frame-card frame-status-{{ f.status }}"
+         data-frame-id="{{ f.id }}"
+         data-roll-id="{{ roll.id }}"
+         data-rotation="{{ f.rotation }}"
+         draggable="true">
+  <div class="frame-thumb">
+    <img src="{{ url_for('serve_thumb', roll_id=roll.id, frame_id=f.id) }}?v={{ f.exposure_count }}"
+         alt="{{ f.original_name }}"
+         loading="lazy">
+    <span class="frame-order">{{ '%02d' % (f.order + 1) }}</span>
+    <span class="frame-status-dot" title="{{ f.status }}"></span>
+  </div>
+  <div class="frame-card-body">
+    <div class="frame-name" title="{{ f.original_name }}">{{ f.original_name }}</div>
+    <div class="frame-src">{{ f.src_width }} × {{ f.src_height }} px</div>
+    <div class="frame-meta">
+      <span>{{ f.resolution }}</span>
+      <span class="dot-sep">·</span>
+      <span>{{ f.transform }}</span>
+      {% if f.rotation %}
+        <span class="dot-sep">·</span>
+        <span>{{ f.rotation }}°</span>
+      {% endif %}
+    </div>
+    <div class="frame-controls">
+      <div class="seg seg-sm" data-frame-opt-seg="resolution">
+        <label class="seg-item">
+          <input type="radio" name="res-{{ f.id }}" value="4k" {{ 'checked' if f.resolution == '4k' }}>
+          <span>4K</span>
+        </label>
+        <label class="seg-item">
+          <input type="radio" name="res-{{ f.id }}" value="8k" {{ 'checked' if f.resolution == '8k' }}>
+          <span>8K</span>
+        </label>
+      </div>
+      <div class="seg seg-sm" data-frame-opt-seg="transform">
+        <label class="seg-item">
+          <input type="radio" name="tx-{{ f.id }}" value="fit" {{ 'checked' if f.transform == 'fit' }}>
+          <span>Fit</span>
+        </label>
+        <label class="seg-item">
+          <input type="radio" name="tx-{{ f.id }}" value="fill" {{ 'checked' if f.transform == 'fill' }}>
+          <span>Fill</span>
+        </label>
+      </div>
+      <div class="frame-icon-row">
+        <button type="button" class="icon-btn" data-action="rotate-frame" title="Rotate 90° clockwise">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 10a6 6 0 1 0 6-6"/>
+            <path d="M10 1v3.5h3.5"/>
+          </svg>
+        </button>
+        <div class="seg seg-sm seg-bg" data-frame-opt-seg="background">
+          <label class="seg-item" title="Black background">
+            <input type="radio" name="bg-{{ f.id }}" value="black" {{ 'checked' if f.background == 'black' }}>
+            <span class="bg-dot bg-dot-black"></span>
+          </label>
+          <label class="seg-item" title="White background">
+            <input type="radio" name="bg-{{ f.id }}" value="white" {{ 'checked' if f.background == 'white' }}>
+            <span class="bg-dot bg-dot-white"></span>
+          </label>
+        </div>
+        <button type="button" class="icon-btn icon-btn-danger" data-action="delete-frame" title="Remove frame">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M5 6h10M8 6V4h4v2M6 6l1 10h6l1-10"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</article>
