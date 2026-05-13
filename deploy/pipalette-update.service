@@ -1,0 +1,22 @@
+[Unit]
+Description=piPalette in-app update worker
+After=network-online.target
+Wants=network-online.target
+# pipalette.service is stopped/started by apply-update.sh, not by systemd dep
+# ordering — we don't want systemd to immediately restart pipalette when this
+# unit briefly stops it.
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=@PREFIX@
+Environment="PYTHONUNBUFFERED=1"
+Environment="PIPALETTE_USER=@USER@"
+Environment="PIPALETTE_PREFIX=@PREFIX@"
+Environment="PIPALETTE_STATE_DIR=@STATE_DIR@"
+ExecStart=@PREFIX@/deploy/apply-update.sh
+
+[Install]
+# Triggered on demand via `sudo systemctl start pipalette-update.service`;
+# no WantedBy on purpose.

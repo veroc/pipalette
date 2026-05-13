@@ -1,6 +1,8 @@
 """Flask application factory + routes."""
 
+import json
 import shutil
+import time
 from pathlib import Path
 
 from flask import (
@@ -14,6 +16,7 @@ from flask import (
     url_for,
 )
 
+from . import updates
 from .config import Config
 from .device import DeviceManager, discover
 from .film_tables import FilmTables, SLOT_MAX, SLOT_MIN
@@ -46,6 +49,43 @@ def _data_dir_size(data_dir):
         except OSError:
             pass
     return total
+
+
+def _format_timestamp(ts):
+    if not ts:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))
+
+
+def _lut_set_payload(lut_set):
+    """Pack one LUT set into a serializable dict for the curve renderer.
+
+    Values are sent in *display* space (stored × per-channel scale) so the
+    frontend can plot directly without knowing about scale factors.
+    """
+    def scaled(channel, scale):
+        return [v * scale for v in channel.values]
+
+    return {
+        "red": scaled(lut_set.red, lut_set.scale_r),
+        "green": scaled(lut_set.green, lut_set.scale_g),
+        "blue": scaled(lut_set.blue, lut_set.scale_b),
+        "scale_r": lut_set.scale_r,
+        "scale_g": lut_set.scale_g,
+        "scale_b": lut_set.scale_b,
+    }
+
+
+def _curve_payload(table):
+    """Return JSON-serializable curve data for the detail page.
+
+    The PP8K firmware loads Set 7 at HRES=4096 (4K) and Set 9 at HRES=8192
+    (8K) — these are the two curves we visualize.
+    """
+    return json.dumps({
+        "4k": _lut_set_payload(table.lut_sets[7]),
+        "8k": _lut_set_payload(table.lut_sets[9]),
+    })
 
 
 def _storage_snapshot(data_dir):
@@ -118,6 +158,29 @@ def create_app(data_dir=None):
             profiles=film_tables.profiles(),
         )
 
+    @app.route("/film-tables/<profile_id>")
+    def film_table_detail_page(profile_id):
+        profile = film_tables.profile(profile_id)
+        if profile is None:
+            abort(404)
+        try:
+            table = film_tables.read_table(profile_id)
+        except Exception as exc:
+            abort(500, description=f"Failed to parse FLM: {exc}")
+        if table is None:
+            abort(404)
+        curves = _curve_payload(table)
+        return render_template(
+            "film_table_detail.html",
+            view="film-tables",
+            status=device.status(),
+            profile=profile,
+            table=table,
+            curves=curves,
+            uploaded_label=_format_timestamp(profile.get("uploaded_at")),
+            size_label=_format_bytes(profile.get("size", 0)),
+        )
+
     @app.route("/device")
     def device_page():
         return render_template(
@@ -125,6 +188,7 @@ def create_app(data_dir=None):
             view="device",
             status=device.status(),
             config=config.all(),
+            version=updates.version_payload(),
         )
 
     # ---- partials (for in-page swaps) ------------------------------------
@@ -149,6 +213,30 @@ def create_app(data_dir=None):
     def api_status():
         force = request.args.get("force") == "1"
         return jsonify(device.status(force=force))
+
+    @app.route("/api/version")
+    def api_version():
+        return jsonify(updates.version_payload())
+
+    @app.route("/api/update/check", methods=["POST"])
+    def api_update_check():
+        try:
+            return jsonify(updates.check_for_updates())
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
+
+    @app.route("/api/update/apply", methods=["POST"])
+    def api_update_apply():
+        payload = request.get_json(silent=True) or {}
+        target = (payload.get("target") or "").strip()
+        if not target:
+            return jsonify({"error": "target tag required"}), 400
+        try:
+            return jsonify(updates.trigger_update(target))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 503
 
     @app.route("/api/discover", methods=["POST"])
     def api_discover():

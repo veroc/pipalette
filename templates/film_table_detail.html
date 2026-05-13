@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block title %} — {{ profile.name }}{% endblock %}
+
+{% block content %}
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <div class="crumbs"><a href="{{ url_for('film_tables_page') }}">Film Tables</a> <span>/</span> <span>{{ profile.name }}</span></div>
+      <h1 class="panel-title">{{ profile.name }}</h1>
+      <p class="panel-sub">
+        {{ profile.camera_type }} <span class="dot-sep">·</span>
+        {% if profile.is_bw %}B&amp;W{% if profile.bw_filter_name %} ({{ profile.bw_filter_name }} filter){% endif %}{% else %}Color{% endif %}
+        <span class="dot-sep">·</span>
+        aspect {{ profile.aspect_w }}:{{ profile.aspect_h }}
+      </p>
+    </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-ghost btn-danger" data-action="delete-profile" data-profile-id="{{ profile.id }}">Delete</button>
+    </div>
+  </header>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <div class="info-title">Identification</div>
+      <dl class="kv">
+        <dt>Name</dt><dd>{{ table.name }}</dd>
+        <dt>Internal name</dt><dd>{{ table.internal_name }}</dd>
+        <dt>Camera type</dt><dd>{{ table.camera_type_name }} ({{ table.camera_type }})</dd>
+        <dt>Aspect ratio</dt><dd>{{ table.aspect_w }} : {{ table.aspect_h }}</dd>
+      </dl>
+    </div>
+
+    <div class="info-card">
+      <div class="info-title">Emulsion</div>
+      <dl class="kv">
+        <dt>Type</dt><dd>{% if table.is_bw %}Black &amp; White{% else %}Color{% endif %}</dd>
+        {% if table.is_bw %}
+          <dt>B&amp;W filter</dt><dd>{{ table.bw_filter_name }} ({{ table.bw_filter }})</dd>
+        {% endif %}
+        <dt>Header flags</dt><dd>0x{{ '%02X' | format(table.flags) }}</dd>
+        <dt>LUT sets</dt><dd>{{ table.lut_sets | length }}</dd>
+      </dl>
+    </div>
+
+    <div class="info-card">
+      <div class="info-title">File</div>
+      <dl class="kv">
+        <dt>Original name</dt><dd>{{ profile.original_name }}</dd>
+        <dt>SHA-1</dt><dd class="kv-mono-sm">{{ profile.id }}</dd>
+        <dt>Size</dt><dd>{{ size_label }}</dd>
+        {% if uploaded_label %}<dt>Uploaded</dt><dd>{{ uploaded_label }}</dd>{% endif %}
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">Transfer curves</h2>
+      <p class="panel-sub">Input pixel value (0–255, 8-bit) to CRT exposure drive. The firmware loads the 4K curve at HRES&nbsp;=&nbsp;4096 and the 8K curve at HRES&nbsp;=&nbsp;8192.</p>
+    </div>
+  </header>
+
+  <div class="curve-grid">
+    <div class="curve-panel" data-curve-panel="4k">
+      <div class="curve-panel-head">
+        <div class="curve-panel-title">
+          <span class="curve-panel-name">4K curve</span>
+          <span class="curve-panel-tag">Set&nbsp;7</span>
+        </div>
+        <div class="ch-toggles" data-ch-toggles>
+          <label class="ch-toggle ch-r"><input type="checkbox" data-channel="red" checked><span>R</span></label>
+          <label class="ch-toggle ch-g"><input type="checkbox" data-channel="green" checked><span>G</span></label>
+          <label class="ch-toggle ch-b"><input type="checkbox" data-channel="blue" checked><span>B</span></label>
+        </div>
+      </div>
+      <div class="curve-canvas" data-curve-canvas></div>
+      <div class="curve-readout" data-curve-readout>Hover the curve for values</div>
+    </div>
+
+    <div class="curve-panel" data-curve-panel="8k">
+      <div class="curve-panel-head">
+        <div class="curve-panel-title">
+          <span class="curve-panel-name">8K curve</span>
+          <span class="curve-panel-tag">Set&nbsp;9</span>
+        </div>
+        <div class="ch-toggles" data-ch-toggles>
+          <label class="ch-toggle ch-r"><input type="checkbox" data-channel="red" checked><span>R</span></label>
+          <label class="ch-toggle ch-g"><input type="checkbox" data-channel="green" checked><span>G</span></label>
+          <label class="ch-toggle ch-b"><input type="checkbox" data-channel="blue" checked><span>B</span></label>
+        </div>
+      </div>
+      <div class="curve-canvas" data-curve-canvas></div>
+      <div class="curve-readout" data-curve-readout>Hover the curve for values</div>
+    </div>
+  </div>
+</section>
+
+<script id="curve-data" type="application/json">{{ curves | safe }}</script>
+{% endblock %}

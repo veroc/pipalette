@@ -1,5 +1,5 @@
 <div class="film-table-row" data-profile-id="{{ profile.id }}">
-  <div class="film-table-row-main">
+  <a class="film-table-row-main" href="{{ url_for('film_table_detail_page', profile_id=profile.id) }}">
     <div class="film-table-row-name">{{ profile.name }}</div>
     <div class="film-table-row-meta">
       <span>{{ profile.camera_type }}</span>
@@ -8,7 +8,7 @@
       <span class="dot-sep">·</span>
       <span class="meta-muted">{{ profile.original_name }}</span>
     </div>
-  </div>
+  </a>
   <div class="film-table-row-actions">
     <button type="button" class="btn btn-ghost btn-sm btn-danger" data-action="delete-profile" data-profile-id="{{ profile.id }}">
       Delete

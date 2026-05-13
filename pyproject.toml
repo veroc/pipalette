@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "Flask>=3.0",
-    "pp8k",
+    "pp8k @ git+https://github.com/veroc/pp8k@v0.7.2",
 ]
 
 [build-system]

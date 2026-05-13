@@ -1,0 +1,273 @@
+% piPalette User Manual -- pandoc xelatex template.
+% Cover: dark, mirrors static/css/app.css.
+% Body : off-white paper with the same amber accent.
+
+\documentclass[11pt]{article}
+
+\usepackage{fontspec}
+\usepackage[a4paper, margin=22mm, top=22mm, bottom=22mm]{geometry}
+\usepackage{xcolor}
+\usepackage{pagecolor}
+\usepackage{tikz}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{booktabs}
+\usepackage{colortbl}
+\usepackage[most]{tcolorbox}
+\usepackage{fancyvrb}
+\usepackage{framed}
+\usepackage{calc}
+\usepackage{tocloft}
+\usepackage[export]{adjustbox}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{hyperref}
+
+% ---- cover palette (dark; mirrors the app UI) ------------------------------
+\definecolor{coverBg}{HTML}{0B0C0E}
+\definecolor{coverInk}{HTML}{E7EBF0}
+\definecolor{coverMute}{HTML}{B8C0CB}
+\definecolor{coverFade}{HTML}{7F8895}
+\definecolor{coverFaint}{HTML}{545D6A}
+
+% ---- body palette (white paper, cool neutral) -----------------------------
+\definecolor{paperBg}{HTML}{FFFFFF}
+\definecolor{paperPanel}{HTML}{F4F5F6}
+\definecolor{paperBorder}{HTML}{E4E7EB}
+\definecolor{paperBorderStrong}{HTML}{CBD1D7}
+\definecolor{ink}{HTML}{11141A}
+\definecolor{inkMute}{HTML}{4A525C}
+\definecolor{inkFade}{HTML}{7C848E}
+\definecolor{inkFaint}{HTML}{B0B6BD}
+
+% ---- shared accents --------------------------------------------------------
+\definecolor{accent}{HTML}{F0A429}
+\definecolor{accentInk}{HTML}{9A5C0E}   % darker amber for text/links on paper
+\definecolor{okColor}{HTML}{3F8F62}
+\definecolor{warnColor}{HTML}{B68927}
+\definecolor{errColor}{HTML}{B83A3A}
+
+% Initial page state is the cover (dark).
+\pagecolor{coverBg}
+\color{coverInk}
+
+% ---- fonts -----------------------------------------------------------------
+\setmainfont{Inter}[
+  UprightFont = * Regular,
+  BoldFont    = * SemiBold,
+  ItalicFont  = * Italic,
+  BoldItalicFont = * SemiBold Italic,
+  Ligatures   = TeX
+]
+\setmonofont{DejaVu Sans Mono}[Scale=0.88]
+\newfontfamily\displayfont{Inter Display}[
+  UprightFont = * Medium,
+  BoldFont    = * Bold,
+  ItalicFont  = * Medium Italic,
+  Ligatures   = TeX
+]
+
+% ---- hyperref --------------------------------------------------------------
+\hypersetup{
+  colorlinks = true,
+  linkcolor  = ink,       % internal links (incl. TOC) blend into the text
+  urlcolor   = accentInk, % external URLs get the amber accent
+  citecolor  = accentInk,
+  pdftitle   = {$title$},
+  pdfauthor  = {piPalette},
+  pdfcreator = {pandoc + xelatex}
+}
+
+% ---- headings (body) -------------------------------------------------------
+% Each top-level section (chapter) starts on a fresh page. We clearpage
+% BEFORE \section runs so the TOC records the new page number, not the old.
+\let\piPaletteOrigSection\section
+\renewcommand{\section}{\clearpage\piPaletteOrigSection}
+\titleformat{\section}
+  {\displayfont\Huge\bfseries\color{ink}}
+  {}{0pt}{}
+  [\vspace{2pt}{\color{accent}\rule{2.4em}{1.6pt}}]
+\titlespacing*{\section}{0pt}{0pt}{0.9em}
+
+\titleformat{\subsection}
+  {\displayfont\LARGE\bfseries\color{ink}}
+  {}{0pt}{}
+\titlespacing*{\subsection}{0pt}{1.4em}{0.5em}
+
+\titleformat{\subsubsection}
+  {\displayfont\large\bfseries\color{inkMute}}
+  {}{0pt}{}
+\titlespacing*{\subsubsection}{0pt}{1.0em}{0.3em}
+
+% ---- lists -----------------------------------------------------------------
+\setlist{itemsep=2pt, parsep=2pt, topsep=4pt, leftmargin=1.4em}
+\renewcommand{\labelitemi}{\textcolor{accent}{\textbullet}}
+\renewcommand{\labelitemii}{\textcolor{inkFade}{\textendash}}
+
+% ---- inline code -----------------------------------------------------------
+\let\oldtexttt\texttt
+\renewcommand{\texttt}[1]{{\ttfamily\textcolor{accentInk}{#1}}}
+
+% ---- code blocks (Shaded) --------------------------------------------------
+\fvset{fontsize=\small, formatcom=\color{ink}, frame=none, framesep=0pt}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{fontsize=\small,formatcom=\color{ink}}
+\newenvironment{Shaded}{%
+  \begin{tcolorbox}[
+    enhanced, breakable,
+    colback=paperPanel, colframe=paperBorder,
+    boxrule=0.4pt, arc=2pt,
+    left=8pt, right=8pt, top=6pt, bottom=6pt,
+    fontupper=\color{ink}
+  ]%
+}{\end{tcolorbox}}
+
+% Syntax-highlight tokens (light bg).
+\providecommand{\KeywordTok}[1]{\textcolor{accentInk}{#1}}
+\providecommand{\DataTypeTok}[1]{\textcolor{accentInk}{#1}}
+\providecommand{\ControlFlowTok}[1]{\textcolor{accentInk}{#1}}
+\providecommand{\StringTok}[1]{\textcolor{okColor}{#1}}
+\providecommand{\CharTok}[1]{\textcolor{okColor}{#1}}
+\providecommand{\CommentTok}[1]{\textcolor{inkFade}{\itshape #1}}
+\providecommand{\DocumentationTok}[1]{\textcolor{inkFade}{\itshape #1}}
+\providecommand{\NormalTok}[1]{\textcolor{ink}{#1}}
+\providecommand{\OtherTok}[1]{\textcolor{inkMute}{#1}}
+\providecommand{\FunctionTok}[1]{\textcolor{ink}{#1}}
+\providecommand{\VariableTok}[1]{\textcolor{ink}{#1}}
+\providecommand{\AttributeTok}[1]{\textcolor{inkMute}{#1}}
+\providecommand{\DecValTok}[1]{\textcolor{okColor}{#1}}
+\providecommand{\BaseNTok}[1]{\textcolor{okColor}{#1}}
+\providecommand{\FloatTok}[1]{\textcolor{okColor}{#1}}
+\providecommand{\BuiltInTok}[1]{\textcolor{inkMute}{#1}}
+\providecommand{\ErrorTok}[1]{\textcolor{errColor}{#1}}
+
+% ---- callout (mirrors the toast / accent-left-border look) -----------------
+\newtcolorbox{notebox}{
+  enhanced, breakable,
+  colback=paperPanel, colframe=paperBorder,
+  boxrule=0pt, arc=2pt,
+  borderline west={2.6pt}{0pt}{accent},
+  left=12pt, right=12pt, top=8pt, bottom=8pt,
+  fontupper=\color{inkMute}
+}
+\renewenvironment{quote}{\begin{notebox}}{\end{notebox}}
+
+% ---- tables ----------------------------------------------------------------
+\renewcommand{\arraystretch}{1.15}
+\arrayrulecolor{paperBorder}
+
+% ---- figures (screenshots) -------------------------------------------------
+% Screenshots are dark UI shots; keep them flush, centered, with a subtle
+% 1px border in paperBorderStrong so they read as embedded artwork on the
+% white paper page rather than floating shapes.
+\setkeys{Gin}{width=0.92\linewidth, keepaspectratio}
+\makeatletter
+\let\piPaletteOrigIncludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \piPaletteOrigIncludegraphics[#1, cfbox=paperBorderStrong 0.4pt 0pt]{#2}%
+}
+\makeatother
+% Place figures exactly where they appear, no float drift.
+\floatplacement{figure}{H}
+\captionsetup{
+  font={small, color=inkFade},
+  labelfont={small, color=inkMute, bf},
+  labelsep=period,
+  skip=6pt,
+  justification=centering
+}
+
+% ---- table of contents -----------------------------------------------------
+% Paper-styled TOC: chapter (section) + subsection only, no numbering, faint
+% leader dots, monospace page numbers.
+\setcounter{secnumdepth}{0}   % suppress 1, 1.1, 1.2 in body headings
+\setcounter{tocdepth}{2}      % include sections + subsections in TOC
+
+\renewcommand{\contentsname}{Contents}
+\renewcommand{\cfttoctitlefont}{\displayfont\Huge\bfseries\color{ink}}
+\renewcommand{\cftaftertoctitle}{%
+  \par\vspace{2pt}{\color{accent}\rule{2.4em}{1.6pt}}\par\vspace{1.6em}%
+}
+
+% Chapter-level entry
+\renewcommand{\cftsecfont}{\displayfont\large\color{ink}}
+\renewcommand{\cftsecpagefont}{\ttfamily\normalsize\color{inkMute}}
+\renewcommand{\cftsecleader}{\color{inkFaint}\cftdotfill{\cftsecdotsep}}
+\renewcommand{\cftsecdotsep}{6}
+\setlength{\cftbeforesecskip}{10pt}
+\setlength{\cftsecindent}{0pt}
+\setlength{\cftsecnumwidth}{0pt}
+
+% Subsection entry (indented, lighter)
+\renewcommand{\cftsubsecfont}{\color{inkMute}}
+\renewcommand{\cftsubsecpagefont}{\ttfamily\small\color{inkFade}}
+\renewcommand{\cftsubsecleader}{\color{inkFaint}\cftdotfill{\cftsubsecdotsep}}
+\renewcommand{\cftsubsecdotsep}{6}
+\setlength{\cftbeforesubsecskip}{2pt}
+\setlength{\cftsubsecindent}{1.2em}
+\setlength{\cftsubsecnumwidth}{0pt}
+
+% ---- page furniture --------------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[L]{\color{inkFaint}\footnotesize $title$}
+\fancyfoot[C]{\color{inkFaint}\footnotesize \textemdash\ rev $revision$ \textemdash}
+\fancyfoot[R]{\color{inkFaint}\footnotesize \thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ---- pandoc helpers --------------------------------------------------------
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\real}[1]{#1}
+\providecommand{\passthrough}[1]{#1}
+
+% ---- aperture mark (mirrors the SVG in templates/partials/topbar.html) -----
+\newcommand{\apertureMark}[1]{%
+  \begin{tikzpicture}[line cap=round]
+    \draw[accent, line width=#1] (0,0) circle (2.4cm);
+    \draw[accent, line width=#1] (0,0) circle (1.2cm);
+    \draw[accent, line width=#1] (0, 2.4) -- (0, 1.6);
+    \draw[accent, line width=#1] (0,-2.4) -- (0,-1.6);
+    \draw[accent, line width=#1] (-2.4,0) -- (-1.6,0);
+    \draw[accent, line width=#1] ( 2.4,0) -- ( 1.6,0);
+  \end{tikzpicture}%
+}
+
+% ---- cover page ------------------------------------------------------------
+\newcommand{\makecover}{%
+  \begin{titlepage}
+    \thispagestyle{empty}
+    \begin{center}
+      \vspace*{4.2cm}
+      \apertureMark{2.4pt}\\[2.6cm]
+      {\displayfont\fontsize{56pt}{62pt}\selectfont\color{coverInk}piPalette}\\[0.7cm]
+      \begin{minipage}{10cm}
+        \centering
+        {\displayfont\large\color{coverMute}$description$}
+      \end{minipage}\\[2.0cm]
+      {\displayfont\Large\color{coverFade}User Manual}\\[2.6cm]
+      {\footnotesize\color{coverFaint}\ttfamily Revision $revision$ \quad\textbullet\quad $date$}
+    \end{center}
+    \vfill
+  \end{titlepage}
+  % Switch to the paper-coloured body.
+  \newpagecolor{paperBg}%
+  \color{ink}%
+  % Front-matter page (TOC) uses lowercase roman, then reset to 1 for body.
+  \pagenumbering{roman}%
+  \tableofcontents
+  \clearpage
+  \pagenumbering{arabic}%
+}
+
+% ---- main document ---------------------------------------------------------
+\begin{document}
+\makecover
+$body$
+\end{document}

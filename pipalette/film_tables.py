@@ -100,6 +100,13 @@ class FilmTables:
                 return None
             return (self._files_dir / profile["filename"]).read_bytes()
 
+    def read_table(self, profile_id):
+        """Return the parsed pp8k FilmTable for a profile, or None."""
+        raw = self.read_bytes(profile_id)
+        if raw is None:
+            return None
+        return _parse_flm_bytes(raw)
+
     # ---- mutations -------------------------------------------------------
 
     def add(self, raw_bytes, original_name):

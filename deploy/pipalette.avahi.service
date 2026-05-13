@@ -1,0 +1,14 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Advertise piPalette as an HTTP service on the LAN. The bare hostname
+     resolution (pipalette.local) works without this — avahi-daemon does
+     that automatically — but this file makes the device show up in
+     Finder's Bonjour browser and similar tools. -->
+<service-group>
+  <name replace-wildcards="yes">piPalette on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>80</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>

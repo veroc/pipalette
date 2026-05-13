@@ -24,7 +24,7 @@ SLOT_MIN = 0
 SLOT_MAX = 19
 
 ALLOWED_RESOLUTIONS = ("4k", "8k")
-ALLOWED_TRANSFORMS = ("fit", "fill")
+ALLOWED_TRANSFORMS = ("fit", "fill", "1to1")
 ALLOWED_ROTATIONS = (0, 90, 180, 270)
 ALLOWED_BACKGROUNDS = ("black", "white")
 ALLOWED_BW_FILTERS = (1, 2, 3)  # Green, Red, Blue. 0 (Clear) is not selectable.
@@ -261,6 +261,7 @@ class RollStore:
                 "exposed_at": None,
                 "exposure_count": 0,
                 "last_error": None,
+                "transform_warning": None,
             }
             roll["frames"].append(frame)
             self._save()
@@ -289,7 +290,7 @@ class RollStore:
             if "transform" in changes:
                 v = changes["transform"]
                 if v not in ALLOWED_TRANSFORMS:
-                    raise ValueError("transform must be 'fit' or 'fill'")
+                    raise ValueError("transform must be 'fit', 'fill', or '1to1'")
                 if frame["transform"] != v:
                     frame["transform"] = v
                     dirty = True
@@ -307,9 +308,9 @@ class RollStore:
                 if frame["background"] != v:
                     frame["background"] = v
                     dirty = True
-            self._save()
             if dirty and any(k in changes for k in regen_keys):
                 self._render_frame_outputs(roll, frame)
+            self._save()
             return _deep_copy_json(frame)
 
     def delete_frame(self, roll_id, frame_id):
@@ -402,28 +403,50 @@ class RollStore:
             bg = (0, 0, 0) if frame["background"] == "black" else (255, 255, 255)
             canvas = Image.new("RGB", (width, height), bg)
 
-            img_ratio = img.width / img.height
-            frame_ratio = width / height
+            # Cleared on every render — a previous 1:1 crop might no longer apply.
+            frame["transform_warning"] = None
 
-            if frame["transform"] == "fill":
-                if img_ratio > frame_ratio:
-                    new_h = height
-                    new_w = round(height * img_ratio)
+            if frame["transform"] == "1to1":
+                src_w, src_h = img.width, img.height
+                if src_w > width or src_h > height:
+                    # Center-crop so the placed image is exactly the canvas
+                    # in the over-sized dimension(s); under-sized dimensions
+                    # pass through and get background padding.
+                    crop_w = min(src_w, width)
+                    crop_h = min(src_h, height)
+                    left = (src_w - crop_w) // 2
+                    top = (src_h - crop_h) // 2
+                    placed = img.crop((left, top, left + crop_w, top + crop_h))
+                    frame["transform_warning"] = (
+                        f"Source {src_w}×{src_h} px exceeds the "
+                        f"{frame['resolution'].upper()} canvas "
+                        f"({width}×{height} px) — center-cropped."
+                    )
                 else:
-                    new_w = width
-                    new_h = round(width / img_ratio)
-            else:  # fit
-                if img_ratio > frame_ratio:
-                    new_w = width
-                    new_h = round(width / img_ratio)
-                else:
-                    new_h = height
-                    new_w = round(height * img_ratio)
+                    placed = img
+                new_w, new_h = placed.width, placed.height
+            else:
+                img_ratio = img.width / img.height
+                frame_ratio = width / height
+                if frame["transform"] == "fill":
+                    if img_ratio > frame_ratio:
+                        new_h = height
+                        new_w = round(height * img_ratio)
+                    else:
+                        new_w = width
+                        new_h = round(width / img_ratio)
+                else:  # fit
+                    if img_ratio > frame_ratio:
+                        new_w = width
+                        new_h = round(width / img_ratio)
+                    else:
+                        new_h = height
+                        new_w = round(height * img_ratio)
+                placed = img.resize((new_w, new_h), Image.LANCZOS)
 
-            resized = img.resize((new_w, new_h), Image.LANCZOS)
             x = (width - new_w) // 2
             y = (height - new_h) // 2
-            canvas.paste(resized, (x, y))
+            canvas.paste(placed, (x, y))
 
             canvas.save(out_path, "PNG", optimize=False, compress_level=1)
 

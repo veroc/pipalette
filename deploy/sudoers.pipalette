@@ -1,0 +1,3 @@
+# Grant the piPalette service user permission to trigger the update
+# worker. Only this one command — nothing else.
+@USER@ ALL=(root) NOPASSWD: /bin/systemctl start pipalette-update.service

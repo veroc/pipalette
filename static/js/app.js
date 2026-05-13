@@ -235,9 +235,14 @@
     try {
       var res = await fetch("/api/film-tables/" + profileId, { method: "DELETE" });
       if (!res.ok) throw new Error(res.statusText);
-      var row = document.querySelector('[data-profile-id="' + profileId + '"]');
-      if (row) row.remove();
       toast("Deleted", "ok");
+      // On the detail page there's no row to remove — back to the listing.
+      if (document.body.dataset.view === "film-tables" && /\/film-tables\//.test(location.pathname)) {
+        location.href = "/film-tables";
+        return;
+      }
+      var rowAfter = document.querySelector('[data-profile-id="' + profileId + '"]');
+      if (rowAfter) rowAfter.remove();
     } catch (err) {
       toast("Delete failed: " + err.message, "err");
     }
@@ -556,6 +561,8 @@
     return backdrop;
   }
 
+  var TRANSFORM_LABELS = { fit: "Fit", fill: "Fill", "1to1": "1:1" };
+
   async function updateFrame(rollId, frameId, changes) {
     var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
     if (card) card.classList.add("is-busy");
@@ -572,7 +579,10 @@
         var meta = card.querySelector(".frame-meta");
         if (meta) {
           meta.innerHTML = "";
-          var parts = [frame.resolution, frame.transform];
+          var parts = [
+            frame.resolution,
+            TRANSFORM_LABELS[frame.transform] || frame.transform,
+          ];
           if (frame.rotation) parts.push(frame.rotation + "°");
           parts.forEach(function (p, i) {
             if (i > 0) {
@@ -586,12 +596,41 @@
             meta.appendChild(span);
           });
         }
+        renderFrameWarning(card, frame.transform_warning);
       }
     } catch (err) {
       toast("Save failed: " + err.message, "err");
     } finally {
       if (card) card.classList.remove("is-busy");
     }
+  }
+
+  function renderFrameWarning(card, message) {
+    var body = card.querySelector(".frame-card-body");
+    if (!body) return;
+    var warn = card.querySelector(".frame-warning");
+    if (!message) {
+      if (warn) warn.remove();
+      return;
+    }
+    if (!warn) {
+      warn = document.createElement("div");
+      warn.className = "frame-warning";
+      warn.innerHTML =
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">' +
+          '<path d="M8 2 L14.5 13 L1.5 13 Z"/>' +
+          '<path d="M8 6.5v3"/>' +
+          '<circle cx="8" cy="11.3" r="0.6" fill="currentColor" stroke="none"/>' +
+        '</svg>' +
+        '<span></span>';
+      // Insert just after .frame-meta (or after .frame-src as a fallback).
+      var meta = body.querySelector(".frame-meta");
+      var anchor = meta || body.querySelector(".frame-src");
+      if (anchor && anchor.nextSibling) body.insertBefore(warn, anchor.nextSibling);
+      else body.appendChild(warn);
+    }
+    warn.title = message;
+    warn.querySelector("span").textContent = message;
   }
 
   async function deleteFrame(rollId, frameId) {
@@ -731,8 +770,152 @@
       ev.preventDefault();
       var card2 = target.closest(".frame-card");
       if (card2) deleteFrame(card2.dataset.rollId, card2.dataset.frameId);
+    } else if (action === "update-check") {
+      ev.preventDefault();
+      checkForUpdates(target);
+    } else if (action === "update-apply") {
+      ev.preventDefault();
+      applyUpdate(target.dataset.target);
     }
   });
+
+  // -------- updates ---------------------------------------------------
+
+  async function checkForUpdates(btn) {
+    var panel = document.querySelector("[data-update-panel]");
+    var resultEl = panel ? panel.querySelector("[data-update-result]") : null;
+    if (!panel || !resultEl) return;
+    btn.disabled = true;
+    var origLabel = btn.querySelector("span").textContent;
+    btn.querySelector("span").textContent = "Checking…";
+    resultEl.hidden = false;
+    resultEl.innerHTML = '<div class="update-status">Fetching from origin…</div>';
+    try {
+      var info = await jsonFetch("/api/update/check", { method: "POST" });
+      renderUpdateInfo(resultEl, info);
+    } catch (err) {
+      resultEl.innerHTML = '<div class="update-status update-err">' +
+        escapeHtml("Check failed: " + err.message) + '</div>';
+    } finally {
+      btn.disabled = false;
+      btn.querySelector("span").textContent = origLabel;
+    }
+  }
+
+  function renderUpdateInfo(el, info) {
+    if (!info.latest) {
+      el.innerHTML = '<div class="update-status">No version tags found on the remote yet.</div>';
+      return;
+    }
+    if (info.on_latest) {
+      el.innerHTML = '<div class="update-status update-ok">Up to date — running ' +
+        escapeHtml(info.current) + '.</div>';
+      return;
+    }
+    var notes = "";
+    if (info.notes && info.notes.length) {
+      notes = '<ul class="update-notes">';
+      info.notes.forEach(function (n) {
+        notes += '<li><code>' + escapeHtml(n.commit) + '</code> ' +
+                 escapeHtml(n.subject) + '</li>';
+      });
+      notes += '</ul>';
+    }
+    el.innerHTML =
+      '<div class="update-status update-warn">Update available: <strong>' +
+        escapeHtml(info.latest) + '</strong> (currently ' + escapeHtml(info.current) + ').</div>' +
+      notes +
+      '<div class="update-actions"><button type="button" class="btn btn-primary" ' +
+        'data-action="update-apply" data-target="' + escapeAttr(info.latest) + '">' +
+        'Update now</button></div>';
+  }
+
+  async function applyUpdate(target) {
+    var ok = await confirmDialog({
+      title: "Apply update?",
+      messageNodes: buildNodes([
+        "piPalette will check out ", strong(target),
+        " and restart. The page will reconnect automatically — exposures should not be running.",
+      ]),
+      confirmLabel: "Update now",
+    });
+    if (!ok) return;
+
+    var panel = document.querySelector("[data-update-panel]");
+    var resultEl = panel ? panel.querySelector("[data-update-result]") : null;
+    if (resultEl) {
+      resultEl.hidden = false;
+      resultEl.innerHTML = '<div class="update-status">Starting update…</div>';
+    }
+
+    try {
+      await jsonFetch("/api/update/apply", {
+        method: "POST",
+        body: { target: target },
+      });
+    } catch (err) {
+      if (resultEl) {
+        resultEl.innerHTML = '<div class="update-status update-err">' +
+          escapeHtml("Failed to start: " + err.message) + '</div>';
+      }
+      return;
+    }
+    pollForUpdateCompletion(target, resultEl);
+  }
+
+  function pollForUpdateCompletion(target, resultEl) {
+    // The service restarts during the update — fetches will fail for a few
+    // seconds. Keep trying for ~2 min, then give up and surface a message.
+    var started = Date.now();
+    var timeoutMs = 120000;
+    function tick() {
+      if (Date.now() - started > timeoutMs) {
+        if (resultEl) {
+          resultEl.innerHTML = '<div class="update-status update-err">' +
+            'Timed out waiting for the service to come back up. ' +
+            'Try <code>sudo journalctl -u pipalette-update -e</code> on the host.' +
+            '</div>';
+        }
+        return;
+      }
+      fetch("/api/version", { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.statusText); })
+        .then(function (v) {
+          var status = v.status || "starting";
+          if (resultEl) {
+            resultEl.innerHTML = '<div class="update-status">' +
+              escapeHtml("Status: " + status) + '</div>';
+          }
+          if (/^error:/i.test(status)) {
+            if (resultEl) {
+              resultEl.innerHTML = '<div class="update-status update-err">' +
+                escapeHtml(status) + '</div>';
+            }
+            return;
+          }
+          // Match against bare version (strip any "-N-gSHA").
+          var bare = (v.version || "").split("-")[0];
+          if (bare === target) {
+            if (resultEl) {
+              resultEl.innerHTML = '<div class="update-status update-ok">' +
+                'Updated to ' + escapeHtml(v.version) + '. Reloading…</div>';
+            }
+            setTimeout(function () { location.reload(); }, 1200);
+            return;
+          }
+          setTimeout(tick, 2000);
+        })
+        .catch(function () { setTimeout(tick, 2000); });
+    }
+    setTimeout(tick, 2000);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
 
   // Frame card segmented controls + roll options
   document.addEventListener("change", function (ev) {
@@ -838,5 +1021,226 @@
 
     bindFrameDragReorder();
     bindConfigForm();
+    bindCurvePanels();
   });
+
+  // -------- curve renderer (SVG, read-only) ---------------------------
+
+  var CH_INFO = [
+    { key: "red",   suffix: "r", label: "R" },
+    { key: "green", suffix: "g", label: "G" },
+    { key: "blue",  suffix: "b", label: "B" },
+  ];
+  var CH_STROKE = { red: "#ff5d5d", green: "#5ed46d", blue: "#6ea8e2" };
+
+  function bindCurvePanels() {
+    var dataEl = document.getElementById("curve-data");
+    if (!dataEl) return;
+    var curves;
+    try { curves = JSON.parse(dataEl.textContent); }
+    catch (e) { console.warn("curve data parse failed", e); return; }
+
+    $$(".curve-panel").forEach(function (panel) {
+      var key = panel.dataset.curvePanel;
+      var data = curves[key];
+      if (!data) return;
+      var state = { data: data, channels: { red: true, green: true, blue: true } };
+      renderCurvePanel(panel, state);
+
+      var canvas = panel.querySelector("[data-curve-canvas]");
+      // Re-render on resize so the SVG viewBox stays in sync with the
+      // container aspect — SVG scales, but we re-tick the axis labels.
+      var ro = new ResizeObserver(function () { renderCurvePanel(panel, state); });
+      ro.observe(canvas);
+
+      panel.querySelectorAll('[data-ch-toggles] input').forEach(function (cb) {
+        cb.addEventListener("change", function () {
+          state.channels[cb.dataset.channel] = cb.checked;
+          renderCurvePanel(panel, state);
+        });
+      });
+    });
+  }
+
+  function renderCurvePanel(panel, state) {
+    var canvas = panel.querySelector("[data-curve-canvas]");
+    var readout = panel.querySelector("[data-curve-readout]");
+    if (!canvas) return;
+
+    var rect = canvas.getBoundingClientRect();
+    var w = Math.max(rect.width, 200);
+    var h = Math.max(rect.height, 140);
+    var pad = { l: 44, r: 8, t: 8, b: 22 };
+    var plotW = w - pad.l - pad.r;
+    var plotH = h - pad.t - pad.b;
+
+    // Y-axis max: max of *enabled* channels, with a sensible floor so an
+    // empty selection still gives a usable axis.
+    var maxY = 1;
+    CH_INFO.forEach(function (ci) {
+      if (!state.channels[ci.key]) return;
+      var arr = state.data[ci.key];
+      for (var i = 0; i < arr.length; i++) if (arr[i] > maxY) maxY = arr[i];
+    });
+    // Round up to a nice number for the axis.
+    maxY = niceCeil(maxY);
+
+    function px(i) { return pad.l + (i / 255) * plotW; }
+    function py(v) { return pad.t + plotH - (v / maxY) * plotH; }
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+    svg.setAttribute("preserveAspectRatio", "none");
+
+    // Grid + axes
+    var xTicks = [0, 32, 64, 96, 128, 160, 192, 224, 255];
+    var yTicks = niceYTicks(maxY, 5);
+    yTicks.forEach(function (v) {
+      var y = py(v);
+      var line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", pad.l); line.setAttribute("x2", pad.l + plotW);
+      line.setAttribute("y1", y); line.setAttribute("y2", y);
+      line.setAttribute("class", "curve-grid-line");
+      svg.appendChild(line);
+      var t = document.createElementNS(svgNS, "text");
+      t.setAttribute("x", pad.l - 6); t.setAttribute("y", y + 3);
+      t.setAttribute("text-anchor", "end");
+      t.setAttribute("class", "curve-axis-label");
+      t.textContent = formatY(v);
+      svg.appendChild(t);
+    });
+    xTicks.forEach(function (i) {
+      var x = px(i);
+      var line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", x); line.setAttribute("x2", x);
+      line.setAttribute("y1", pad.t); line.setAttribute("y2", pad.t + plotH);
+      line.setAttribute("class", "curve-grid-line");
+      svg.appendChild(line);
+      var t = document.createElementNS(svgNS, "text");
+      t.setAttribute("x", x); t.setAttribute("y", pad.t + plotH + 12);
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("class", "curve-axis-label");
+      t.textContent = i;
+      svg.appendChild(t);
+    });
+
+    // Plot area frame
+    var frame = document.createElementNS(svgNS, "rect");
+    frame.setAttribute("x", pad.l); frame.setAttribute("y", pad.t);
+    frame.setAttribute("width", plotW); frame.setAttribute("height", plotH);
+    frame.setAttribute("fill", "none");
+    frame.setAttribute("class", "curve-axis-line");
+    svg.appendChild(frame);
+
+    // Curves
+    CH_INFO.forEach(function (ci) {
+      if (!state.channels[ci.key]) return;
+      var arr = state.data[ci.key];
+      var line = "";
+      var fill = "M " + px(0) + " " + (pad.t + plotH);
+      for (var i = 0; i < arr.length; i++) {
+        var x = px(i).toFixed(2);
+        var y = py(arr[i]).toFixed(2);
+        line += (i === 0 ? "M " : " L ") + x + " " + y;
+        fill += " L " + x + " " + y;
+      }
+      fill += " L " + px(255) + " " + (pad.t + plotH) + " Z";
+
+      var fp = document.createElementNS(svgNS, "path");
+      fp.setAttribute("d", fill);
+      fp.setAttribute("class", "curve-fill curve-fill-" + ci.suffix);
+      svg.appendChild(fp);
+
+      var lp = document.createElementNS(svgNS, "path");
+      lp.setAttribute("d", line);
+      lp.setAttribute("class", "curve-line curve-line-" + ci.suffix);
+      svg.appendChild(lp);
+    });
+
+    // Hover crosshair + per-channel dots
+    var hoverLine = document.createElementNS(svgNS, "line");
+    hoverLine.setAttribute("y1", pad.t); hoverLine.setAttribute("y2", pad.t + plotH);
+    hoverLine.setAttribute("class", "curve-hover-line");
+    svg.appendChild(hoverLine);
+
+    var hoverDots = {};
+    CH_INFO.forEach(function (ci) {
+      var c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("r", 3);
+      c.setAttribute("class", "curve-hover-dot");
+      c.setAttribute("stroke", CH_STROKE[ci.key]);
+      svg.appendChild(c);
+      hoverDots[ci.key] = c;
+    });
+
+    // Hit target — full plot area, so movement is smooth.
+    var hit = document.createElementNS(svgNS, "rect");
+    hit.setAttribute("x", pad.l); hit.setAttribute("y", pad.t);
+    hit.setAttribute("width", plotW); hit.setAttribute("height", plotH);
+    hit.setAttribute("fill", "transparent");
+    svg.appendChild(hit);
+
+    function setHover(idx) {
+      if (idx == null) {
+        hoverLine.classList.remove("is-active");
+        CH_INFO.forEach(function (ci) { hoverDots[ci.key].classList.remove("is-active"); });
+        readout.textContent = "Hover the curve for values";
+        return;
+      }
+      var x = px(idx);
+      hoverLine.setAttribute("x1", x); hoverLine.setAttribute("x2", x);
+      hoverLine.classList.add("is-active");
+      var parts = ['<span class="ro-label">in</span> ' + idx];
+      CH_INFO.forEach(function (ci) {
+        var dot = hoverDots[ci.key];
+        if (!state.channels[ci.key]) {
+          dot.classList.remove("is-active");
+          return;
+        }
+        var v = state.data[ci.key][idx];
+        dot.setAttribute("cx", x);
+        dot.setAttribute("cy", py(v));
+        dot.classList.add("is-active");
+        parts.push('<span class="ro-' + ci.suffix + '">' + ci.label + '</span> ' + formatY(v));
+      });
+      readout.innerHTML = parts.join('<span class="dot-sep">·</span>');
+    }
+
+    hit.addEventListener("mousemove", function (ev) {
+      var r = svg.getBoundingClientRect();
+      // SVG viewBox is sized to the rendered px, so coords are 1:1.
+      var localX = (ev.clientX - r.left) * (w / r.width);
+      var frac = (localX - pad.l) / plotW;
+      var idx = Math.max(0, Math.min(255, Math.round(frac * 255)));
+      setHover(idx);
+    });
+    hit.addEventListener("mouseleave", function () { setHover(null); });
+
+    canvas.replaceChildren(svg);
+  }
+
+  function niceCeil(v) {
+    if (v <= 1) return 1;
+    var pow = Math.pow(10, Math.floor(Math.log10(v)));
+    var n = v / pow;
+    var step;
+    if (n <= 1) step = 1;
+    else if (n <= 2) step = 2;
+    else if (n <= 5) step = 5;
+    else step = 10;
+    return step * pow;
+  }
+
+  function niceYTicks(maxY, count) {
+    var ticks = [];
+    for (var i = 0; i <= count; i++) ticks.push(Math.round(maxY * i / count));
+    return ticks;
+  }
+
+  function formatY(v) {
+    if (v >= 10000) return (v / 1000).toFixed(0) + "k";
+    if (v >= 1000) return (v / 1000).toFixed(1) + "k";
+    return String(v);
+  }
 })();

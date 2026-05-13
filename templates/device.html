@@ -114,4 +114,39 @@
   </header>
   <div class="scan-results" id="scan-results"></div>
 </section>
+
+<section class="panel" data-update-panel>
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">System</h2>
+      <p class="panel-sub">
+        Installed version and update controls.
+        {% if not version.managed %}<span class="meta-muted">— this is not a managed install, so the update button is disabled.</span>{% endif %}
+      </p>
+    </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-ghost" data-action="update-check"
+              {{ 'disabled' if not version.managed }}>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M3 10a7 7 0 0 1 12-4.95"/>
+          <path d="M15 3v3.5h-3.5"/>
+          <path d="M17 10a7 7 0 0 1-12 4.95"/>
+          <path d="M5 17v-3.5h3.5"/>
+        </svg>
+        <span>Check for updates</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="info-card">
+    <dl class="kv">
+      <dt>Version</dt><dd><span data-update-version>{{ version.version }}</span></dd>
+      <dt>Commit</dt><dd class="kv-mono-sm">{{ version.commit or '—' }}</dd>
+      <dt>Install</dt><dd>{% if version.managed %}Managed (systemd){% else %}Development{% endif %}</dd>
+      {% if version.status %}<dt>Last update</dt><dd>{{ version.status }}</dd>{% endif %}
+    </dl>
+  </div>
+
+  <div class="update-result" data-update-result hidden></div>
+</section>
 {% endblock %}
