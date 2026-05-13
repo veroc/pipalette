@@ -338,11 +338,11 @@ class RollStore:
                          mark_exposed=False):
         """Update a frame's status fields atomically. No re-render.
 
-        - `status`: pending | exposing | done | failed
+        - `status`: pending | exposing | done | failed | skipped
         - `error`: stored in `last_error`; pass None to clear it.
         - `mark_exposed=True`: bump exposure_count and stamp exposed_at.
         """
-        allowed = ("pending", "exposing", "done", "failed")
+        allowed = ("pending", "exposing", "done", "failed", "skipped")
         if status not in allowed:
             raise ValueError(f"status must be one of {allowed}")
         with self._lock:
@@ -359,6 +359,21 @@ class RollStore:
                 frame["exposed_at"] = int(time.time())
             self._save()
             return _deep_copy_json(frame)
+
+    def set_roll_field(self, roll_id, key, value):
+        """Update a single mutable roll-wide field atomically.
+
+        Used by the exposure runner for `recalibrate_next` between frames.
+        """
+        allowed = ("recalibrate_next", "skip_calibration", "status")
+        if key not in allowed:
+            raise ValueError(f"field {key} is not directly settable")
+        with self._lock:
+            roll = self._find(roll_id)
+            if roll is None:
+                raise KeyError(roll_id)
+            roll[key] = value
+            self._save()
 
     def reset_exposing_frames(self):
         """On startup, any 'exposing' frame is from a dead runner — mark failed.

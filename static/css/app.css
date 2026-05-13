@@ -728,6 +728,36 @@ select.input { height: 32px; padding-right: 24px; }
 .check { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-1); cursor: pointer; user-select: none; }
 .check input { accent-color: var(--accent); }
 
+.run-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  color: var(--text-1);
+}
+.run-status.run-stopping { border-left-color: var(--warn); }
+.run-status.run-done { border-left-color: var(--ok); }
+.run-status.run-failed { border-left-color: var(--err); color: var(--err); }
+.run-status-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(240,164,41,0.18);
+}
+.run-status.run-stopping .run-status-dot { background: var(--warn); box-shadow: 0 0 0 3px rgba(226,180,85,0.18); }
+.run-status.run-done .run-status-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(76,183,130,0.18); }
+.run-status.run-failed .run-status-dot { background: var(--err); box-shadow: 0 0 0 3px rgba(226,107,107,0.18); }
+.run-status-text { flex: 1; }
+.run-status-progress {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+}
+
 /* ----- frames ------------------------------------------------------- */
 
 .frame-grid {
@@ -771,9 +801,67 @@ select.input { height: 32px; padding-right: 24px; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.frame-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: rgba(8, 9, 11, 0.78);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  gap: 8px;
+  padding: 14px 16px;
+  color: var(--text-0);
+}
+.frame-progress[hidden] { display: none; }
+.frame-progress-phase {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-align: center;
+}
+.frame-progress-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.frame-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 200ms linear;
+}
+.frame-progress-bar.is-indeterminate .frame-progress-fill {
+  width: 30% !important;
+  animation: indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(333%); }
+}
+.frame-progress-time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-2);
+  text-align: center;
+}
+
 .frame-status-done { box-shadow: inset 3px 0 0 var(--ok); }
 .frame-status-failed { box-shadow: inset 3px 0 0 var(--err); }
 .frame-status-exposing { box-shadow: inset 3px 0 0 var(--accent); }
+.frame-status-skipped { box-shadow: inset 3px 0 0 var(--text-3); opacity: 0.6; }
+.frame-status-skipped .frame-thumb img { filter: grayscale(1) brightness(0.6); }
+.frame-skipped-note {
+  margin-top: 4px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-3);
+  font-style: italic;
+}
 
 .frame-thumb {
   position: relative;
@@ -807,6 +895,7 @@ select.input { height: 32px; padding-right: 24px; }
 .frame-status-done .frame-status-dot { background: var(--ok); }
 .frame-status-failed .frame-status-dot { background: var(--err); }
 .frame-status-exposing .frame-status-dot { background: var(--accent); }
+.frame-status-skipped .frame-status-dot { background: var(--text-3); }
 
 .frame-card-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .frame-name {

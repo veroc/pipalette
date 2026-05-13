@@ -21,6 +21,26 @@
       </p>
     </div>
     <div class="panel-actions">
+      {% set pending_count = roll.frames | selectattr('status', 'equalto', 'pending') | list | length %}
+      <button type="button" class="btn btn-primary"
+              data-action="start-roll"
+              data-roll-id="{{ roll.id }}"
+              data-pending-count="{{ pending_count }}"
+              {{ 'disabled' if pending_count == 0 }}>
+        <svg viewBox="0 0 20 20" fill="currentColor" stroke="none">
+          <path d="M6 4l11 6-11 6z"/>
+        </svg>
+        <span>Start exposing</span>
+      </button>
+      <button type="button" class="btn btn-ghost"
+              data-action="stop-roll"
+              data-roll-id="{{ roll.id }}"
+              hidden>
+        <svg viewBox="0 0 20 20" fill="currentColor" stroke="none">
+          <rect x="5" y="5" width="10" height="10" rx="1"/>
+        </svg>
+        <span>Stop after current</span>
+      </button>
       <button type="button" class="btn btn-ghost btn-danger" data-action="delete-roll">Delete roll</button>
     </div>
   </header>
@@ -32,9 +52,11 @@
         <input type="checkbox" id="opt-skip-cal" data-roll-opt="skip_calibration" {{ 'checked' if roll.skip_calibration }}>
         <span>Skip recalibration between continuous frames</span>
       </label>
-      <p class="form-hint">First frame always calibrates. Stop/pause/error forces re-cal on resume.</p>
+      <p class="form-hint">First frame always calibrates. Stop/error forces re-cal on resume.</p>
     </div>
   </div>
+
+  <div class="run-status" data-run-status hidden></div>
 </section>
 
 <section class="panel">

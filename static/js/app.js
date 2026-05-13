@@ -774,6 +774,18 @@
       ev.preventDefault();
       var card3 = target.closest(".frame-card");
       if (card3) exposeFrame(card3.dataset.rollId, card3.dataset.frameId);
+    } else if (action === "toggle-skip") {
+      ev.preventDefault();
+      var card4 = target.closest(".frame-card");
+      if (card4) toggleSkipFrame(card4.dataset.rollId, card4.dataset.frameId);
+    } else if (action === "start-roll") {
+      ev.preventDefault();
+      // Recompute from the live DOM so skip toggles are reflected.
+      var pending = $$('.frame-card[data-frame-status="pending"]').length;
+      startRoll(target.dataset.rollId, pending);
+    } else if (action === "stop-roll") {
+      ev.preventDefault();
+      stopRoll(target.dataset.rollId);
     } else if (action === "update-check") {
       ev.preventDefault();
       checkForUpdates(target);
@@ -783,29 +795,67 @@
     }
   });
 
+  // -------- skip toggle ----------------------------------------------
+
+  async function toggleSkipFrame(rollId, frameId) {
+    try {
+      await jsonFetch(
+        "/api/rolls/" + rollId + "/frames/" + frameId + "/skip-toggle",
+        { method: "POST" },
+      );
+      // SSE will also fire frame_status, but refresh directly so a user
+      // without an open EventSource (unlikely) still sees the change.
+      await refreshFrameCard(rollId, frameId);
+    } catch (err) {
+      toast("Couldn't toggle skip: " + err.message, "err");
+    }
+  }
+
   // -------- exposure --------------------------------------------------
 
   async function exposeFrame(rollId, frameId) {
     var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
     var statusText = card ? (card.dataset.frameStatus || "") : "";
-    if (statusText === "done" || statusText === "failed") {
-      var ok = await confirmDialog({
-        title: statusText === "done" ? "Re-expose frame?" : "Retry exposure?",
+    // The PP8K can't detect whether film is loaded — every Expose click
+    // is a confirm step so we don't burn empty cartridges or stack
+    // re-exposures by accident.
+    var dialog;
+    if (statusText === "done") {
+      dialog = {
+        title: "Re-expose frame?",
         messageNodes: buildNodes([
-          statusText === "done"
-            ? "This frame is already exposed. Re-exposing burns it again on the next available film."
-            : "Try this exposure again. The previous error will be cleared.",
+          "This frame is already marked exposed. Re-exposing burns the next frame of film. ",
+          strong("Confirm film is loaded and ready."),
         ]),
-        confirmLabel: statusText === "done" ? "Re-expose" : "Retry",
-      });
-      if (!ok) return;
+        confirmLabel: "Re-expose",
+      };
+    } else if (statusText === "failed") {
+      dialog = {
+        title: "Retry exposure?",
+        messageNodes: buildNodes([
+          "Try this exposure again — the previous error will be cleared. ",
+          strong("Confirm film is loaded and ready."),
+        ]),
+        confirmLabel: "Retry",
+      };
+    } else {
+      dialog = {
+        title: "Expose frame?",
+        messageNodes: buildNodes([
+          "This will print the rendered image onto the next frame of film. ",
+          strong("Confirm film is loaded and ready."),
+        ]),
+        confirmLabel: "Expose",
+      };
     }
+    var ok = await confirmDialog(dialog);
+    if (!ok) return;
     try {
       await jsonFetch("/api/rolls/" + rollId + "/frames/" + frameId + "/expose", {
         method: "POST",
       });
       await refreshFrameCard(rollId, frameId);
-      pollFrameUntilSettled(rollId, frameId);
+      // SSE will drive progress + the final card refresh on settle.
     } catch (err) {
       toast("Expose failed: " + err.message, "err");
     }
@@ -821,6 +871,7 @@
       var next = holder.firstElementChild;
       if (next) {
         card.replaceWith(next);
+        syncStartButton(rollId);
         return next;
       }
     } catch (err) {
@@ -829,54 +880,268 @@
     return null;
   }
 
-  // Track running pollers so we don't stack them per-frame.
-  var _framePollers = {};
-
-  function pollFrameUntilSettled(rollId, frameId) {
-    var key = rollId + ":" + frameId;
-    if (_framePollers[key]) return;  // already polling this frame
-    _framePollers[key] = true;
-    var started = Date.now();
-    var hardLimitMs = 30 * 60 * 1000;  // 30 min — generous; an exposure is ~70s
-
-    function tick() {
-      fetch("/api/rolls/" + rollId + "/frames/" + frameId, { cache: "no-store" })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.statusText); })
-        .then(function (frame) {
-          if (frame.status === "exposing") {
-            if (Date.now() - started > hardLimitMs) {
-              delete _framePollers[key];
-              toast("Exposure poll timeout — check journalctl", "warn");
-              return;
-            }
-            setTimeout(tick, 2000);
-            return;
-          }
-          // Settled (done / failed / pending) — swap the card and stop polling.
-          delete _framePollers[key];
-          refreshFrameCard(rollId, frameId);
-          if (frame.status === "done") {
-            toast("Frame exposed", "ok");
-          } else if (frame.status === "failed") {
-            toast("Exposure failed: " + (frame.last_error || "unknown"), "err");
-          }
-        })
-        .catch(function () {
-          setTimeout(tick, 2000);
-        });
-    }
-    setTimeout(tick, 2000);
+  function syncStartButton(rollId) {
+    var btn = document.querySelector('[data-action="start-roll"][data-roll-id="' + rollId + '"]');
+    if (!btn) return;
+    var pending = $$('.frame-card[data-frame-status="pending"]').length;
+    btn.disabled = pending === 0;
+    btn.dataset.pendingCount = String(pending);
   }
 
-  // On load: if any frame is already "exposing" (e.g. browser refreshed
-  // mid-exposure), pick up polling automatically.
+  // On load: connect to SSE if there's a roll panel on the page. The
+  // initial "state" event on connect tells us about any in-flight run.
   function resumeExposurePolling() {
-    $$(".frame-card").forEach(function (card) {
-      if (card.dataset.frameStatus === "exposing") {
-        pollFrameUntilSettled(card.dataset.rollId, card.dataset.frameId);
-      }
-    });
+    var panel = document.querySelector("[data-roll-id]");
+    if (!panel) return;
+    connectRunnerEvents(panel.dataset.rollId);
   }
+
+  // -------- SSE: runner events ----------------------------------------
+
+  var _eventSource = null;
+
+  function connectRunnerEvents(rollId) {
+    if (_eventSource) return;  // already connected
+    var es = new EventSource("/api/runner/events");
+    _eventSource = es;
+
+    es.addEventListener("state", function (ev) {
+      try {
+        var st = JSON.parse(ev.data);
+        applyRunnerState(rollId, st);
+      } catch (e) { console.warn(e); }
+    });
+
+    es.addEventListener("progress", function (ev) {
+      try {
+        var p = JSON.parse(ev.data);
+        if (p.roll_id !== rollId) return;
+        renderFrameProgress(p);
+      } catch (e) { console.warn(e); }
+    });
+
+    es.addEventListener("frame_status", function (ev) {
+      try {
+        var s = JSON.parse(ev.data);
+        if (s.roll_id !== rollId) return;
+        if (s.status === "exposing") {
+          showFrameProgressOverlay(s.frame_id);
+          return;
+        }
+        // Any other transition (done/failed/skipped/pending) — refresh
+        // the card so it picks up the new status, exposure_count,
+        // last_error, etc.
+        refreshFrameCard(rollId, s.frame_id);
+        if (s.status === "done") toast("Frame exposed", "ok");
+        else if (s.status === "failed") toast("Exposure failed: " + (s.error || "unknown"), "err");
+      } catch (e) { console.warn(e); }
+    });
+
+    es.onerror = function () {
+      // EventSource retries automatically. Just log so we know.
+      console.warn("SSE error — browser will retry");
+    };
+  }
+
+  function applyRunnerState(pageRollId, st) {
+    var isThisRoll = st.busy && st.roll_id === pageRollId;
+    if (isThisRoll) {
+      // Hide overlays on any card that isn't the active one.
+      $$(".frame-card").forEach(function (card) {
+        if (card.dataset.frameId !== st.frame_id) {
+          hideFrameProgressOverlay(card.dataset.frameId);
+        }
+      });
+      if (st.frame_id) showFrameProgressOverlay(st.frame_id);
+      if (st.mode === "roll") {
+        setRunButtons(pageRollId, st.stopping ? "stopping" : "running");
+        var counts = countFrameStates();
+        setRunStatus(pageRollId, {
+          level: st.stopping ? "stopping" : "running",
+          text: st.stopping ? "Stopping — finishing current frame" : "Exposing roll",
+          progress: counts.done + " / " + counts.total + " done",
+        });
+      }
+    } else if (!st.busy) {
+      // Run ended for this page's roll (or none was ours).
+      $$(".frame-card").forEach(function (card) {
+        hideFrameProgressOverlay(card.dataset.frameId);
+      });
+      setRunButtons(pageRollId, "idle");
+      var counts2 = countFrameStates();
+      // Only paint a final banner if there's been activity. If the
+      // banner is already hidden, leave it hidden.
+      var banner = document.querySelector("[data-run-status]");
+      if (banner && !banner.hidden) {
+        if (counts2.remaining === 0 && counts2.total > 0) {
+          setRunStatus(pageRollId, {
+            level: "done",
+            text: "Run complete — all frames exposed",
+            progress: counts2.done + " / " + counts2.total + " done",
+          });
+        } else {
+          setRunStatus(pageRollId, {
+            level: null,
+            text: "Run halted",
+            progress: counts2.done + " / " + counts2.total + " done · " +
+                      counts2.remaining + " remaining",
+          });
+        }
+      }
+    }
+  }
+
+  function countFrameStates() {
+    var cards = $$(".frame-card");
+    var done = 0, pending = 0;
+    cards.forEach(function (c) {
+      var s = c.dataset.frameStatus;
+      if (s === "done") done++;
+      else if (s === "pending" || s === "failed") pending++;
+    });
+    return { done: done, total: cards.length, remaining: pending };
+  }
+
+  function showFrameProgressOverlay(frameId) {
+    var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
+    if (!card) return;
+    var overlay = card.querySelector("[data-frame-progress]");
+    if (!overlay) return;
+    overlay.hidden = false;
+    // Default to indeterminate until we receive a progress event with
+    // lines_total — the calibration phase has no measurable progress.
+    var bar = overlay.querySelector(".frame-progress-bar");
+    if (bar && !bar.dataset.everDeterminate) bar.classList.add("is-indeterminate");
+    if (!overlay.querySelector("[data-progress-phase]").textContent) {
+      overlay.querySelector("[data-progress-phase]").textContent = "Starting";
+    }
+  }
+
+  function hideFrameProgressOverlay(frameId) {
+    var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
+    if (!card) return;
+    var overlay = card.querySelector("[data-frame-progress]");
+    if (overlay) overlay.hidden = true;
+  }
+
+  var PHASE_LABELS = {
+    setup: "Setup",
+    calibrating: "Calibrating",
+    sending: "Exposing",
+    finishing: "Finishing",
+    complete: "Complete",
+    aborted: "Aborted",
+    error: "Error",
+  };
+
+  function renderFrameProgress(p) {
+    var card = document.querySelector('.frame-card[data-frame-id="' + p.frame_id + '"]');
+    if (!card) return;
+    var overlay = card.querySelector("[data-frame-progress]");
+    if (!overlay) return;
+    overlay.hidden = false;
+    var phaseLabel = PHASE_LABELS[p.phase] || p.phase || "—";
+    if (p.channel) phaseLabel += " · " + String(p.channel).toUpperCase();
+    overlay.querySelector("[data-progress-phase]").textContent = phaseLabel;
+
+    var bar = overlay.querySelector(".frame-progress-bar");
+    var fill = overlay.querySelector("[data-progress-fill]");
+    if (p.lines_total > 0 && p.phase === "sending") {
+      bar.classList.remove("is-indeterminate");
+      bar.dataset.everDeterminate = "1";
+      var pct = Math.min(100, Math.max(0, (p.lines_sent / p.lines_total) * 100));
+      fill.style.width = pct.toFixed(1) + "%";
+    } else {
+      bar.classList.add("is-indeterminate");
+    }
+
+    var t = overlay.querySelector("[data-progress-time]");
+    var bits = [];
+    if (p.elapsed_seconds != null) bits.push(p.elapsed_seconds.toFixed(0) + "s elapsed");
+    if (p.eta_seconds != null && p.eta_seconds > 0) bits.push("~" + p.eta_seconds.toFixed(0) + "s left");
+    t.textContent = bits.join(" · ");
+  }
+
+  // -------- roll-level Start/Stop ------------------------------------
+
+  async function startRoll(rollId, pendingCount) {
+    if (!pendingCount) {
+      toast("No pending frames to expose", "warn");
+      return;
+    }
+    var ok = await confirmDialog({
+      title: "Start exposing?",
+      messageNodes: buildNodes([
+        "About to expose ", strong(pendingCount + " frame" + (pendingCount === 1 ? "" : "s")),
+        " sequentially. Stop after current frame is always available. ",
+        strong("Confirm film is loaded and ready."),
+      ]),
+      confirmLabel: "Start exposing",
+    });
+    if (!ok) return;
+    try {
+      await jsonFetch("/api/rolls/" + rollId + "/start", { method: "POST" });
+      setRunButtons(rollId, "running");
+      // SSE state event will drive the rest.
+    } catch (err) {
+      toast("Couldn't start: " + err.message, "err");
+    }
+  }
+
+  async function stopRoll(rollId) {
+    var ok = await confirmDialog({
+      title: "Stop after current frame?",
+      messageNodes: buildNodes([
+        "The current frame will finish (no mid-frame abort — that would waste film). After it lands, the run halts. ",
+        strong("You can resume later from the next pending frame."),
+      ]),
+      confirmLabel: "Stop",
+    });
+    if (!ok) return;
+    try {
+      await jsonFetch("/api/rolls/" + rollId + "/stop", { method: "POST" });
+      setRunButtons(rollId, "stopping");
+    } catch (err) {
+      toast("Couldn't stop: " + err.message, "err");
+    }
+  }
+
+  function setRunButtons(rollId, phase) {
+    // phase: idle | running | stopping
+    var startBtn = document.querySelector('[data-action="start-roll"][data-roll-id="' + rollId + '"]');
+    var stopBtn = document.querySelector('[data-action="stop-roll"][data-roll-id="' + rollId + '"]');
+    if (!startBtn || !stopBtn) return;
+    if (phase === "idle") {
+      startBtn.hidden = false;
+      stopBtn.hidden = true;
+    } else if (phase === "running") {
+      startBtn.hidden = true;
+      stopBtn.hidden = false;
+      stopBtn.disabled = false;
+      stopBtn.querySelector("span").textContent = "Stop after current";
+    } else if (phase === "stopping") {
+      startBtn.hidden = true;
+      stopBtn.hidden = false;
+      stopBtn.disabled = true;
+      stopBtn.querySelector("span").textContent = "Stopping…";
+    }
+  }
+
+  function setRunStatus(rollId, opts) {
+    // opts: { text, progress, level: 'running' | 'stopping' | 'done' | 'failed' | null }
+    var el = document.querySelector("[data-run-status]");
+    if (!el) return;
+    if (!opts) { el.hidden = true; el.className = "run-status"; el.innerHTML = ""; return; }
+    el.hidden = false;
+    el.className = "run-status" + (opts.level ? " run-" + opts.level : "");
+    el.innerHTML =
+      '<span class="run-status-dot"></span>' +
+      '<span class="run-status-text"></span>' +
+      (opts.progress ? '<span class="run-status-progress"></span>' : '');
+    el.querySelector(".run-status-text").textContent = opts.text || "";
+    if (opts.progress) el.querySelector(".run-status-progress").textContent = opts.progress;
+  }
+
 
   // -------- updates ---------------------------------------------------
 

@@ -12,6 +12,11 @@
          loading="lazy">
     <span class="frame-order">{{ '%02d' % (f.order + 1) }}</span>
     <span class="frame-status-dot" title="{{ f.status }}"></span>
+    <div class="frame-progress" data-frame-progress hidden>
+      <div class="frame-progress-phase" data-progress-phase></div>
+      <div class="frame-progress-bar"><div class="frame-progress-fill" data-progress-fill></div></div>
+      <div class="frame-progress-time" data-progress-time></div>
+    </div>
   </div>
   {% set tx_labels = {'fit': 'Fit', 'fill': 'Fill', '1to1': '1:1'} %}
   <div class="frame-card-body">
@@ -78,12 +83,29 @@
             <span class="bg-dot bg-dot-white"></span>
           </label>
         </div>
+        {% if f.status in ('pending', 'skipped') %}
+        <button type="button" class="icon-btn"
+                data-action="toggle-skip"
+                title="{{ 'Mark for exposure' if f.status == 'skipped' else 'Skip this frame in roll runs' }}">
+          {% if f.status == 'skipped' %}
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="10" cy="10" r="6"/>
+            <path d="M7 10h6M10 7v6"/>
+          </svg>
+          {% else %}
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M5 5l10 10M5 15L15 5"/>
+          </svg>
+          {% endif %}
+        </button>
+        {% endif %}
         <button type="button" class="icon-btn icon-btn-danger" data-action="delete-frame" title="Remove frame">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M5 6h10M8 6V4h4v2M6 6l1 10h6l1-10"/>
           </svg>
         </button>
       </div>
+      {% if f.status != 'skipped' %}
       {% set expose_labels = {'pending': 'Expose', 'exposing': 'Exposing…', 'done': 'Re-expose', 'failed': 'Retry'} %}
       <button type="button"
               class="btn btn-sm btn-expose btn-expose-{{ f.status }}"
@@ -97,6 +119,9 @@
         {% endif %}
         <span>{{ expose_labels.get(f.status, 'Expose') }}</span>
       </button>
+      {% else %}
+      <div class="frame-skipped-note">Skipped — won't be exposed in roll runs</div>
+      {% endif %}
       {% if f.last_error and f.status == 'failed' %}
         <div class="frame-warning" title="{{ f.last_error }}">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">

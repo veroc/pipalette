@@ -1,12 +1,14 @@
 """Flask application factory + routes."""
 
 import json
+import queue
 import shutil
 import time
 from pathlib import Path
 
 from flask import (
     Flask,
+    Response,
     abort,
     jsonify,
     redirect,
@@ -50,6 +52,11 @@ def _data_dir_size(data_dir):
         except OSError:
             pass
     return total
+
+
+def _sse(event, data):
+    """Format a single SSE message."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 def _format_timestamp(ts):
@@ -420,6 +427,33 @@ def create_app(data_dir=None):
             return ("", 404)
         return ("", 204) if ok else ("", 404)
 
+    @app.route("/api/rolls/<roll_id>/frames/<frame_id>/skip-toggle", methods=["POST"])
+    def api_frame_skip_toggle(roll_id, frame_id):
+        """Flip a frame between 'pending' and 'skipped'. Only those two
+        statuses participate in the toggle — done/failed/exposing frames
+        return 409."""
+        roll = rolls.get(roll_id)
+        if roll is None:
+            return jsonify({"error": "roll not found"}), 404
+        frame = next((f for f in roll["frames"] if f["id"] == frame_id), None)
+        if frame is None:
+            return jsonify({"error": "frame not found"}), 404
+        if frame["status"] == "pending":
+            new_status = "skipped"
+        elif frame["status"] == "skipped":
+            new_status = "pending"
+        else:
+            return jsonify({
+                "error": f"can't toggle skip on a {frame['status']} frame",
+            }), 409
+        rolls.set_frame_status(roll_id, frame_id, new_status, error=None)
+        # Tell SSE subscribers so other browser tabs / the running UI
+        # re-render the frame card.
+        runner._publish("frame_status", {
+            "roll_id": roll_id, "frame_id": frame_id, "status": new_status,
+        })
+        return jsonify({"frame_id": frame_id, "status": new_status})
+
     @app.route("/api/rolls/<roll_id>/frames/<frame_id>/expose", methods=["POST"])
     def api_frame_expose(roll_id, frame_id):
         try:
@@ -444,12 +478,57 @@ def create_app(data_dir=None):
 
     @app.route("/api/runner")
     def api_runner_status():
-        cur = runner.current()
-        return jsonify({
-            "busy": runner.is_busy(),
-            "roll_id": cur[0] if cur else None,
-            "frame_id": cur[1] if cur else None,
-        })
+        return jsonify(runner.state())
+
+    @app.route("/api/runner/events")
+    def api_runner_events():
+        """SSE stream of exposure progress + lifecycle events.
+
+        Emits the current state on connect, then any (event, data) tuples
+        the runner publishes. A 15s keepalive comment keeps idle
+        connections alive through reverse proxies.
+        """
+        def stream():
+            sub = runner.subscribe()
+            try:
+                # Initial snapshot so a late-arriving client knows where we are.
+                yield _sse("state", runner.state())
+                while True:
+                    try:
+                        event, data = sub.get(timeout=15)
+                        yield _sse(event, data)
+                    except queue.Empty:
+                        yield ": keepalive\n\n"
+            except GeneratorExit:
+                pass
+            finally:
+                runner.unsubscribe(sub)
+
+        resp = Response(stream(), mimetype="text/event-stream")
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        return resp
+
+    @app.route("/api/rolls/<roll_id>/start", methods=["POST"])
+    def api_roll_start(roll_id):
+        try:
+            runner.start_roll(roll_id)
+        except ExposureBusyError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except KeyError:
+            return jsonify({"error": "roll not found"}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"started": roll_id}), 202
+
+    @app.route("/api/rolls/<roll_id>/stop", methods=["POST"])
+    def api_roll_stop(roll_id):
+        state = runner.state()
+        if not state.get("busy") or state.get("roll_id") != roll_id \
+                or state.get("mode") != "roll":
+            return jsonify({"error": "this roll is not currently running"}), 409
+        runner.stop_roll()
+        return jsonify({"stopping": roll_id}), 202
 
     @app.route("/api/rolls/<roll_id>/reorder", methods=["POST"])
     def api_roll_reorder(roll_id):
