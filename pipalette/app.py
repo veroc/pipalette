@@ -19,6 +19,7 @@ from flask import (
 from . import updates
 from .config import Config
 from .device import DeviceManager, discover
+from .exposure import ExposureBusyError, ExposureRunner
 from .film_tables import FilmTables, SLOT_MAX, SLOT_MIN
 from .rolls import RollStore
 
@@ -132,12 +133,16 @@ def create_app(data_dir=None):
 
     film_tables = FilmTables(target)
     rolls = RollStore(data_dir / "rolls")
+    # Clear any "exposing" status left over from a service restart mid-burst.
+    rolls.reset_exposing_frames()
     device = DeviceManager(config)
+    runner = ExposureRunner(device, rolls)
 
     app.config["PIPALETTE_CONFIG"] = config
     app.config["PIPALETTE_FILM_TABLES"] = film_tables
     app.config["PIPALETTE_ROLLS"] = rolls
     app.config["PIPALETTE_DEVICE"] = device
+    app.config["PIPALETTE_RUNNER"] = runner
 
     @app.context_processor
     def inject_storage():
@@ -414,6 +419,37 @@ def create_app(data_dir=None):
         except KeyError:
             return ("", 404)
         return ("", 204) if ok else ("", 404)
+
+    @app.route("/api/rolls/<roll_id>/frames/<frame_id>/expose", methods=["POST"])
+    def api_frame_expose(roll_id, frame_id):
+        try:
+            runner.expose_frame(roll_id, frame_id)
+        except ExposureBusyError as exc:
+            return jsonify({"error": str(exc)}), 409
+        except KeyError:
+            return jsonify({"error": "not found"}), 404
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 410
+        return jsonify({"queued": frame_id, "roll_id": roll_id}), 202
+
+    @app.route("/api/rolls/<roll_id>/frames/<frame_id>")
+    def api_frame_get(roll_id, frame_id):
+        roll = rolls.get(roll_id)
+        if roll is None:
+            abort(404)
+        frame = next((f for f in roll["frames"] if f["id"] == frame_id), None)
+        if frame is None:
+            abort(404)
+        return jsonify(frame)
+
+    @app.route("/api/runner")
+    def api_runner_status():
+        cur = runner.current()
+        return jsonify({
+            "busy": runner.is_busy(),
+            "roll_id": cur[0] if cur else None,
+            "frame_id": cur[1] if cur else None,
+        })
 
     @app.route("/api/rolls/<roll_id>/reorder", methods=["POST"])
     def api_roll_reorder(roll_id):

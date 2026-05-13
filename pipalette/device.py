@@ -29,6 +29,10 @@ class DeviceManager:
         self._snapshot = None
         self._snapshot_time = 0.0
         self._last_error = None
+        # Set by ExposureRunner while a frame is actively printing. status()
+        # consults this so it doesn't try to read fresh mode/info from the
+        # device while the runner is mid-burst.
+        self._busy = False
 
     def _needs_reopen(self):
         return (
@@ -87,6 +91,18 @@ class DeviceManager:
         Always returns a dict, even when the device is unreachable -- in
         that case `connected` is False and `error` carries the reason.
         """
+        # While the runner is using the device for an exposure, don't try to
+        # acquire the device lock — return whatever snapshot we last cached
+        # plus a busy flag.
+        if self._busy:
+            snap = dict(self._snapshot) if self._snapshot else {
+                "connected": True, "mock_mode": bool(self._opened_mock),
+                "target": self._opened_target,
+                "display": _display_label(bool(self._opened_mock), self._opened_target),
+                "error": None, "info": None, "mode": None, "slots": [],
+            }
+            snap["busy"] = True
+            return snap
         with self._lock:
             now = time.monotonic()
             if (
@@ -144,6 +160,27 @@ class DeviceManager:
             "mode": mode_dict,
             "slots": slots,
         }
+
+    def acquire_for_exposure(self):
+        """Return the open pp8k.Device, ensuring it's connected.
+
+        Marks the manager 'busy' so concurrent status() calls don't try
+        to talk to the device. Caller must invoke `release()` when done.
+        """
+        with self._lock:
+            if self._needs_reopen():
+                if self._device is not None:
+                    self._close_locked()
+                self._open()
+            self._busy = True
+            return self._device
+
+    def release(self):
+        """Clear the busy flag and invalidate the cached snapshot so the
+        next status() refreshes from the device."""
+        self._busy = False
+        self._snapshot = None
+        self._snapshot_time = 0.0
 
     def install(self, slot, flm_bytes):
         """Upload encrypted FLM bytes to a device slot.

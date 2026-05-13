@@ -843,6 +843,36 @@ select.input { height: 32px; padding-right: 24px; }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-0); }
 .icon-btn-danger:hover { color: var(--err); background: rgba(226,107,107,0.08); }
 
+.btn-expose {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+.btn-expose-done,
+.btn-expose-failed { background: var(--bg-2); }
+.btn-expose-failed { color: var(--err); border-color: rgba(226,107,107,0.3); }
+.btn-expose-pending { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+.btn-expose-pending:hover { background: #f5b342; }
+.btn-expose-exposing {
+  background: var(--bg-3);
+  color: var(--accent);
+  border-color: rgba(240,164,41,0.3);
+  cursor: not-allowed;
+  position: relative;
+  padding-left: 24px;
+}
+.btn-expose-exposing::before {
+  content: "";
+  position: absolute;
+  left: 8px; top: 50%;
+  width: 10px; height: 10px;
+  margin-top: -5px;
+  border: 1.5px solid rgba(240, 164, 41, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
 .seg-bg .seg-item { padding: 4px 6px; }
 .bg-dot {
   width: 12px; height: 12px;

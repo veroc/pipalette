@@ -3,6 +3,7 @@
 <article class="frame-card frame-status-{{ f.status }}"
          data-frame-id="{{ f.id }}"
          data-roll-id="{{ roll.id }}"
+         data-frame-status="{{ f.status }}"
          data-rotation="{{ f.rotation }}"
          draggable="true">
   <div class="frame-thumb">
@@ -83,6 +84,29 @@
           </svg>
         </button>
       </div>
+      {% set expose_labels = {'pending': 'Expose', 'exposing': 'Exposing…', 'done': 'Re-expose', 'failed': 'Retry'} %}
+      <button type="button"
+              class="btn btn-sm btn-expose btn-expose-{{ f.status }}"
+              data-action="expose-frame"
+              {{ 'disabled' if f.status == 'exposing' }}>
+        {% if f.status != 'exposing' %}
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="10" cy="10" r="6"/>
+          <circle cx="10" cy="10" r="2" fill="currentColor"/>
+        </svg>
+        {% endif %}
+        <span>{{ expose_labels.get(f.status, 'Expose') }}</span>
+      </button>
+      {% if f.last_error and f.status == 'failed' %}
+        <div class="frame-warning" title="{{ f.last_error }}">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M8 2 L14.5 13 L1.5 13 Z"/>
+            <path d="M8 6.5v3"/>
+            <circle cx="8" cy="11.3" r="0.6" fill="currentColor" stroke="none"/>
+          </svg>
+          <span>{{ f.last_error }}</span>
+        </div>
+      {% endif %}
     </div>
   </div>
 </article>

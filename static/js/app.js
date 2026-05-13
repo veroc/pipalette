@@ -770,6 +770,10 @@
       ev.preventDefault();
       var card2 = target.closest(".frame-card");
       if (card2) deleteFrame(card2.dataset.rollId, card2.dataset.frameId);
+    } else if (action === "expose-frame") {
+      ev.preventDefault();
+      var card3 = target.closest(".frame-card");
+      if (card3) exposeFrame(card3.dataset.rollId, card3.dataset.frameId);
     } else if (action === "update-check") {
       ev.preventDefault();
       checkForUpdates(target);
@@ -778,6 +782,101 @@
       applyUpdate(target.dataset.target);
     }
   });
+
+  // -------- exposure --------------------------------------------------
+
+  async function exposeFrame(rollId, frameId) {
+    var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
+    var statusText = card ? (card.dataset.frameStatus || "") : "";
+    if (statusText === "done" || statusText === "failed") {
+      var ok = await confirmDialog({
+        title: statusText === "done" ? "Re-expose frame?" : "Retry exposure?",
+        messageNodes: buildNodes([
+          statusText === "done"
+            ? "This frame is already exposed. Re-exposing burns it again on the next available film."
+            : "Try this exposure again. The previous error will be cleared.",
+        ]),
+        confirmLabel: statusText === "done" ? "Re-expose" : "Retry",
+      });
+      if (!ok) return;
+    }
+    try {
+      await jsonFetch("/api/rolls/" + rollId + "/frames/" + frameId + "/expose", {
+        method: "POST",
+      });
+      await refreshFrameCard(rollId, frameId);
+      pollFrameUntilSettled(rollId, frameId);
+    } catch (err) {
+      toast("Expose failed: " + err.message, "err");
+    }
+  }
+
+  async function refreshFrameCard(rollId, frameId) {
+    try {
+      var html = await htmlFetch("/partials/roll/" + rollId + "/frame/" + frameId);
+      var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
+      if (!card) return null;
+      var holder = document.createElement("div");
+      holder.innerHTML = html.trim();
+      var next = holder.firstElementChild;
+      if (next) {
+        card.replaceWith(next);
+        return next;
+      }
+    } catch (err) {
+      console.warn("frame partial fetch failed", err);
+    }
+    return null;
+  }
+
+  // Track running pollers so we don't stack them per-frame.
+  var _framePollers = {};
+
+  function pollFrameUntilSettled(rollId, frameId) {
+    var key = rollId + ":" + frameId;
+    if (_framePollers[key]) return;  // already polling this frame
+    _framePollers[key] = true;
+    var started = Date.now();
+    var hardLimitMs = 30 * 60 * 1000;  // 30 min — generous; an exposure is ~70s
+
+    function tick() {
+      fetch("/api/rolls/" + rollId + "/frames/" + frameId, { cache: "no-store" })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(r.statusText); })
+        .then(function (frame) {
+          if (frame.status === "exposing") {
+            if (Date.now() - started > hardLimitMs) {
+              delete _framePollers[key];
+              toast("Exposure poll timeout — check journalctl", "warn");
+              return;
+            }
+            setTimeout(tick, 2000);
+            return;
+          }
+          // Settled (done / failed / pending) — swap the card and stop polling.
+          delete _framePollers[key];
+          refreshFrameCard(rollId, frameId);
+          if (frame.status === "done") {
+            toast("Frame exposed", "ok");
+          } else if (frame.status === "failed") {
+            toast("Exposure failed: " + (frame.last_error || "unknown"), "err");
+          }
+        })
+        .catch(function () {
+          setTimeout(tick, 2000);
+        });
+    }
+    setTimeout(tick, 2000);
+  }
+
+  // On load: if any frame is already "exposing" (e.g. browser refreshed
+  // mid-exposure), pick up polling automatically.
+  function resumeExposurePolling() {
+    $$(".frame-card").forEach(function (card) {
+      if (card.dataset.frameStatus === "exposing") {
+        pollFrameUntilSettled(card.dataset.rollId, card.dataset.frameId);
+      }
+    });
+  }
 
   // -------- updates ---------------------------------------------------
 
@@ -1022,6 +1121,7 @@
     bindFrameDragReorder();
     bindConfigForm();
     bindCurvePanels();
+    resumeExposurePolling();
   });
 
   // -------- curve renderer (SVG, read-only) ---------------------------

@@ -334,6 +334,53 @@ class RollStore:
             self._save()
             return True
 
+    def set_frame_status(self, roll_id, frame_id, status, error=None,
+                         mark_exposed=False):
+        """Update a frame's status fields atomically. No re-render.
+
+        - `status`: pending | exposing | done | failed
+        - `error`: stored in `last_error`; pass None to clear it.
+        - `mark_exposed=True`: bump exposure_count and stamp exposed_at.
+        """
+        allowed = ("pending", "exposing", "done", "failed")
+        if status not in allowed:
+            raise ValueError(f"status must be one of {allowed}")
+        with self._lock:
+            roll = self._find(roll_id)
+            if roll is None:
+                raise KeyError(roll_id)
+            frame = _find_frame(roll, frame_id)
+            if frame is None:
+                raise KeyError(frame_id)
+            frame["status"] = status
+            frame["last_error"] = error
+            if mark_exposed:
+                frame["exposure_count"] = int(frame.get("exposure_count", 0)) + 1
+                frame["exposed_at"] = int(time.time())
+            self._save()
+            return _deep_copy_json(frame)
+
+    def reset_exposing_frames(self):
+        """On startup, any 'exposing' frame is from a dead runner — mark failed.
+
+        Called once at app boot so the UI doesn't show ghost spinners after
+        a service restart mid-exposure.
+        """
+        with self._lock:
+            dirty = False
+            for roll in self._index["rolls"]:
+                for frame in roll.get("frames", []):
+                    if frame.get("status") == "exposing":
+                        frame["status"] = "failed"
+                        frame["last_error"] = "Service restarted during exposure"
+                        dirty = True
+            if dirty:
+                self._save()
+
+    def roll_dir(self, roll_id):
+        """Public accessor for the on-disk roll directory."""
+        return self._roll_dir(roll_id)
+
     def reorder(self, roll_id, frame_ids):
         """Set frame order from a full list of frame_ids."""
         with self._lock:
