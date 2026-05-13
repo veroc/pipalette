@@ -20,6 +20,9 @@ STATE_DIR="/var/lib/pipalette"
 APPLY_LEAN=1
 CHANNEL=""
 REF=""
+# scsi2pi version we install if not already present. Bump in lockstep with
+# what pp8k has been validated against (see project memory).
+SCSI2PI_VERSION="6.2.1"
 
 for arg in "$@"; do
   case "$arg" in
@@ -28,6 +31,8 @@ for arg in "$@"; do
     --ref=*) REF="${arg#*=}" ;;
     --prefix=*) PREFIX="${arg#*=}" ;;
     --repo-url=*) REPO_URL="${arg#*=}" ;;
+    --scsi2pi-version=*) SCSI2PI_VERSION="${arg#*=}" ;;
+    --no-scsi2pi) SCSI2PI_VERSION="" ;;
     *) echo "Unknown flag: $arg" >&2; exit 2 ;;
   esac
 done
@@ -62,9 +67,35 @@ apt-get install -y -qq \
   python3-pip \
   avahi-daemon \
   libcap2-bin \
-  ca-certificates
+  ca-certificates \
+  curl
 
 ok "apt packages installed"
+
+# -- scsi2pi (PiSCSI HAT driver) ------------------------------------------
+
+if [[ -n "$SCSI2PI_VERSION" ]]; then
+  if [[ -x /opt/scsi2pi/bin/s2pexec ]] && \
+     /opt/scsi2pi/bin/s2pexec --version 2>&1 | grep -qF "$SCSI2PI_VERSION"; then
+    ok "scsi2pi $SCSI2PI_VERSION already installed"
+  else
+    DISTRO_CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-bookworm}")"
+    ARCH="$(dpkg --print-architecture)"
+    DEB_NAME="scsi2pi_${SCSI2PI_VERSION}_${DISTRO_CODENAME}_${ARCH}-1.deb"
+    DEB_URL="https://www.scsi2pi.net/packages/releases/${DEB_NAME}"
+    DEB_PATH="/tmp/${DEB_NAME}"
+    log "Downloading scsi2pi ${SCSI2PI_VERSION} for ${DISTRO_CODENAME}/${ARCH}…"
+    if ! curl -fsSL -o "$DEB_PATH" "$DEB_URL"; then
+      echo "Error: failed to download $DEB_URL" >&2
+      echo "       Pick a known version with --scsi2pi-version=X.Y, or skip with --no-scsi2pi." >&2
+      exit 1
+    fi
+    log "Installing scsi2pi…"
+    apt-get install -y -qq "$DEB_PATH"
+    rm -f "$DEB_PATH"
+    ok "scsi2pi $SCSI2PI_VERSION installed"
+  fi
+fi
 
 # -- clone / update repo ---------------------------------------------------
 
@@ -93,7 +124,19 @@ if [[ -n "$TARGET" ]]; then
   git -C "$PREFIX" checkout --quiet "$TARGET"
 else
   CURRENT_BRANCH="$(git -C "$PREFIX" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-  log "No tag/ref specified — staying on $CURRENT_BRANCH"
+  # On re-runs the fetch above only updates remote-tracking refs. Fast-forward
+  # the current branch to its upstream so the working tree matches what we
+  # just fetched.
+  if git -C "$PREFIX" rev-parse --abbrev-ref @{u} >/dev/null 2>&1; then
+    log "No tag/ref specified — fast-forwarding $CURRENT_BRANCH to upstream"
+    if ! git -C "$PREFIX" merge --ff-only --quiet @{u}; then
+      echo "Error: $CURRENT_BRANCH has diverged from upstream; can't fast-forward." >&2
+      echo "       Reset the checkout at $PREFIX or pass --ref= explicitly." >&2
+      exit 1
+    fi
+  else
+    log "No tag/ref specified — staying on $CURRENT_BRANCH (no upstream)"
+  fi
   TARGET="$CURRENT_BRANCH"
 fi
 
@@ -113,11 +156,16 @@ sudo -u "$RUN_USER" "$PREFIX/.venv/bin/pip" install --quiet "waitress>=3.0"
 
 ok "virtualenv ready"
 
-# -- state dir -------------------------------------------------------------
+# -- state + data dirs ----------------------------------------------------
 
 mkdir -p "$STATE_DIR"
 chown "$RUN_USER:$RUN_GROUP" "$STATE_DIR"
 chmod 0755 "$STATE_DIR"
+
+# The app expects $PREFIX/data to be writable. ReadWritePaths= requires the
+# path to exist at unit-start time, so make sure it's there.
+mkdir -p "$PREFIX/data"
+chown -R "$RUN_USER:$RUN_GROUP" "$PREFIX/data"
 
 # -- systemd unit ----------------------------------------------------------
 
@@ -176,7 +224,11 @@ fi
 
 systemctl daemon-reload
 systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
-systemctl enable --now pipalette.service
+systemctl enable pipalette.service >/dev/null 2>&1 || true
+# `restart` (not `start`) so unit-file edits on a re-run actually take effect.
+systemctl restart pipalette.service
+# Bounce avahi too — hostname may have just changed; this re-advertises.
+systemctl restart avahi-daemon >/dev/null 2>&1 || true
 
 ok "pipalette.service started"
 
