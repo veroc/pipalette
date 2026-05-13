@@ -917,6 +917,7 @@
         var p = JSON.parse(ev.data);
         if (p.roll_id !== rollId) return;
         renderFrameProgress(p);
+        updateExposeModalProgress(p);
       } catch (e) { console.warn(e); }
     });
 
@@ -930,8 +931,10 @@
         }
         // Any other transition (done/failed/skipped/pending) — refresh
         // the card so it picks up the new status, exposure_count,
-        // last_error, etc.
+        // last_error, etc. Modal tear-down also lives here in case the
+        // state event arrives slightly later than the frame settle.
         refreshFrameCard(rollId, s.frame_id);
+        if (s.status === "done" || s.status === "failed") hideExposeModal();
         if (s.status === "done") toast("Frame exposed", "ok");
         else if (s.status === "failed") toast("Exposure failed: " + (s.error || "unknown"), "err");
       } catch (e) { console.warn(e); }
@@ -953,6 +956,14 @@
         }
       });
       if (st.frame_id) showFrameProgressOverlay(st.frame_id);
+      if (st.mode === "single" && st.frame_id) {
+        // Single-frame is a deliberate one-off — block navigation with
+        // a modal until the exposure settles. Roll runs intentionally
+        // leave the UI navigable so the user can multitask.
+        showExposeModal(st.frame_id);
+      } else {
+        hideExposeModal();
+      }
       if (st.mode === "roll") {
         setRunButtons(pageRollId, st.stopping ? "stopping" : "running");
         var counts = countFrameStates();
@@ -964,6 +975,7 @@
       }
     } else if (!st.busy) {
       // Run ended for this page's roll (or none was ours).
+      hideExposeModal();
       $$(".frame-card").forEach(function (card) {
         hideFrameProgressOverlay(card.dataset.frameId);
       });
@@ -1033,6 +1045,92 @@
     aborted: "Aborted",
     error: "Error",
   };
+
+  // -------- single-frame exposure modal ------------------------------
+
+  var _exposeModal = null;
+
+  function showExposeModal(frameId) {
+    if (_exposeModal && _exposeModal.dataset.frameId === frameId) return;
+    if (_exposeModal) hideExposeModal();
+
+    var card = document.querySelector('.frame-card[data-frame-id="' + frameId + '"]');
+    var orderEl = card ? card.querySelector(".frame-order") : null;
+    var nameEl = card ? card.querySelector(".frame-name") : null;
+    var orderText = orderEl ? orderEl.textContent.trim() : "";
+    var nameText = nameEl ? nameEl.textContent.trim() : "";
+
+    var backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.dataset.frameId = frameId;
+
+    var modal = document.createElement("div");
+    modal.className = "modal expose-modal";
+
+    var head = document.createElement("div");
+    head.className = "modal-head";
+    var title = document.createElement("h3");
+    title.className = "modal-title";
+    title.textContent = "Exposing frame " + (orderText || "—");
+    head.appendChild(title);
+
+    var body = document.createElement("div");
+    body.className = "modal-body expose-modal-body";
+    body.innerHTML =
+      '<div class="expose-modal-frame">' +
+        (nameText ? '<strong></strong>' : '') +
+      '</div>' +
+      '<div class="expose-modal-phase">Starting</div>' +
+      '<div class="expose-modal-bar is-indeterminate"><div class="expose-modal-fill"></div></div>' +
+      '<div class="expose-modal-time"></div>' +
+      '<div class="expose-modal-note">Don’t navigate away — the exposure is running on the device.</div>';
+    if (nameText) {
+      body.querySelector(".expose-modal-frame strong").textContent = nameText;
+    } else {
+      body.querySelector(".expose-modal-frame").remove();
+    }
+
+    modal.appendChild(head);
+    modal.appendChild(body);
+    backdrop.appendChild(modal);
+
+    // Intentionally NO click-to-dismiss and NO Escape key handler:
+    // single-frame exposure is uncancellable mid-burst, so the modal
+    // stays put until the frame settles.
+    document.body.appendChild(backdrop);
+    _exposeModal = backdrop;
+  }
+
+  function hideExposeModal() {
+    if (!_exposeModal) return;
+    _exposeModal.remove();
+    _exposeModal = null;
+  }
+
+  function updateExposeModalProgress(p) {
+    if (!_exposeModal || _exposeModal.dataset.frameId !== p.frame_id) return;
+    var phaseEl = _exposeModal.querySelector(".expose-modal-phase");
+    var bar = _exposeModal.querySelector(".expose-modal-bar");
+    var fill = _exposeModal.querySelector(".expose-modal-fill");
+    var timeEl = _exposeModal.querySelector(".expose-modal-time");
+
+    var phaseLabel = PHASE_LABELS[p.phase] || p.phase || "—";
+    if (p.channel) phaseLabel += " · " + String(p.channel).toUpperCase();
+    phaseEl.textContent = phaseLabel;
+
+    if (p.lines_total > 0 && p.phase === "sending") {
+      bar.classList.remove("is-indeterminate");
+      var pct = Math.min(100, Math.max(0, (p.lines_sent / p.lines_total) * 100));
+      fill.style.width = pct.toFixed(1) + "%";
+    } else {
+      bar.classList.add("is-indeterminate");
+    }
+
+    var bits = [];
+    if (p.elapsed_seconds != null) bits.push(p.elapsed_seconds.toFixed(0) + "s elapsed");
+    if (p.eta_seconds != null && p.eta_seconds > 0) bits.push("~" + p.eta_seconds.toFixed(0) + "s left");
+    timeEl.textContent = bits.join(" · ");
+  }
 
   function renderFrameProgress(p) {
     var card = document.querySelector('.frame-card[data-frame-id="' + p.frame_id + '"]');
