@@ -102,6 +102,16 @@ fi
 
 if [[ -d "$PREFIX/.git" ]]; then
   log "Updating existing checkout at $PREFIX…"
+  # If the user re-runs with a different REPO_URL (e.g. originally
+  # installed from a local rsync target back when the repo was private,
+  # now switching to the public GitHub URL), realign the origin so
+  # subsequent fetches — including the in-app update flow — go to the
+  # right place.
+  CURRENT_ORIGIN="$(git -C "$PREFIX" remote get-url origin 2>/dev/null || true)"
+  if [[ -n "$CURRENT_ORIGIN" && "$CURRENT_ORIGIN" != "$REPO_URL" ]]; then
+    log "Origin drifted ($CURRENT_ORIGIN → $REPO_URL) — updating"
+    git -C "$PREFIX" remote set-url origin "$REPO_URL"
+  fi
   git -C "$PREFIX" fetch --tags --prune
 else
   log "Cloning $REPO_URL → $PREFIX…"
