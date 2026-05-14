@@ -2,7 +2,7 @@
 # piPalette installer for Raspberry Pi OS Lite (Bookworm).
 #
 # Usage (fresh Pi):
-#   curl -sSL https://raw.githubusercontent.com/veroc/pipalette/main/deploy/install.sh | sudo bash
+#   curl -sSL https://raw.githubusercontent.com/veroc/pipalette/master/deploy/install.sh | sudo bash
 #
 # Flags (after `bash` add `-s -- <flag>...`):
 #   --no-lean      skip the lean-Pi tweaks (Bluetooth/audio/swap/etc.)

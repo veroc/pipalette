@@ -65,7 +65,7 @@ installer. From here on, everything is automated:
 
 ```bash
 ssh <your-user>@pipalette.local
-curl -sSL https://raw.githubusercontent.com/veroc/pipalette/main/deploy/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/veroc/pipalette/master/deploy/install.sh | sudo bash
 ```
 
 The installer takes a couple of minutes. When it finishes, piPalette
