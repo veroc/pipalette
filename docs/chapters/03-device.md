@@ -35,8 +35,6 @@ Switching modes applies immediately; there is no Save button. The
 recorder's actual connection state — and any error from a failed open
 — surfaces in the hint line directly under the Mode toggle.
 
-![The Device page in **Mock** mode. The status panel collapses to a single muted card; the topbar pill simply reads *Mock*.](assets/screenshots/device-mock.png)
-
 ## Target
 
 When the mode is **Hardware**, a second field labelled **Target**
@@ -148,8 +146,6 @@ Every page in piPalette carries a small connection pill in the
 top-right of the topbar. Its dot is green when piPalette is connected
 to a recorder (real or mock) and dark grey when it is not. The label
 to the right of the dot summarises the current connection:
-
-![The topbar carries the connection pill on every page — here in *Mock* mode.](assets/screenshots/topbar.png)
 
 * `Mock` — running against the simulator.
 * `ProPalette 8000 · fw NNN` — connected to real hardware, with the

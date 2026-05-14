@@ -11,8 +11,6 @@ the recipe it will be exposed with.
 > roll, queuing up images, adjusting per-frame settings, and starting the
 > exposure run are all roll-level actions.
 
-![The Rolls page lists every roll you have created. Each card summarises the film recipe and frame counts.](assets/screenshots/rolls-list.png)
-
 ## Creating a roll
 
 Open the **Rolls** page from the sidebar and click **New roll** in the
@@ -40,8 +38,6 @@ If the selected film table is black-and-white, a third option appears:
 
 Click **Create**. The new roll appears at the top of the list, immediately
 ready to receive frames.
-
-![The New roll dialog. A B&W filter row appears below *Film table* whenever the selected film is monochrome.](assets/screenshots/new-roll-dialog.png)
 
 > **The film table is locked the moment a roll is created.** piPalette
 > snapshots the FLM bytes into the roll's folder. From this point on, the
@@ -73,8 +69,6 @@ top-left links back to the roll list.
 
 Below the header sits the **frames panel**, where you queue and arrange the
 images that make up the roll.
-
-![A roll in detail: header with the film recipe on top, dropzone, and a grid of frame cards with their per-frame settings.](assets/screenshots/roll-detail.png)
 
 ### Renaming a roll
 

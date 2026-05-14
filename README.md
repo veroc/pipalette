@@ -2,8 +2,6 @@
 
 A modern web interface for the **Polaroid ProPalette 8000** film recorder.
 
-![The piPalette Rolls page — every roll you've created at a glance.](docs/assets/screenshots/rolls-list.png)
-
 The ProPalette 8000 was a high-end digital-to-film recorder sold in the
 late 1990s. Decades later, working units are still out there — but the
 software that shipped with them ran on Windows 95 and connected over
@@ -103,10 +101,9 @@ comfortable with the workflow.
 
 ## Documentation
 
-The [user manual in `docs/`](docs/) covers every page in detail, including
-the per-frame options, the exposure runner, and the device panel. It
-can be built into a PDF with `docs/build.sh` (requires `pandoc` and
-`xelatex`).
+The **[user manual](piPalette-Manual.pdf)** covers every page in detail
+— per-frame options, the exposure runner, the device panel. Markdown
+sources are in [`docs/`](docs/) if you want to read them on GitHub.
 
 ## Hardware notes
 

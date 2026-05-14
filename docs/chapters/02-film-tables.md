@@ -23,8 +23,6 @@ two areas: a dropzone along the top for adding FLMs, and a list below
 of everything currently in the library. If the library is empty the
 list area shows *No film tables yet — upload an FLM to get started*.
 
-![The Film Tables page with a dropzone for new uploads and a list of FLMs already in the library.](assets/screenshots/film-tables.png)
-
 ## Uploading an FLM
 
 There are two ways to add a film table, both equivalent:
