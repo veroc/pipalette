@@ -435,7 +435,11 @@
   }
 
   async function uploadFramesToRoll(rollId, files) {
-    if (!files || files.length === 0) return;
+    // Snapshot the live FileList — the caller may clear input.value
+    // (or drop's DataTransfer may get invalidated) while we await
+    // between iterations.
+    files = Array.from(files || []);
+    if (files.length === 0) return;
     var total = files.length;
     var cancelled = false;
     var added = 0;
