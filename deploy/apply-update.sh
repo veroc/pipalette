@@ -19,6 +19,17 @@ write_status() {
   chown "$RUN_USER:" "$STATUS_FILE" 2>/dev/null || true
 }
 
+# Report failure to the status file so the UI stops polling and shows
+# the error instead of hanging forever on the last "in-progress" message.
+on_error() {
+  local exit_code=$?
+  local last_status
+  last_status="$(cat "$STATUS_FILE" 2>/dev/null || echo unknown)"
+  write_status "error: $last_status failed (exit $exit_code) — see journalctl -u pipalette-update"
+  exit "$exit_code"
+}
+trap on_error ERR
+
 if [[ ! -f "$PENDING_FILE" ]]; then
   log "no pending update; nothing to do"
   write_status "idle"
@@ -40,7 +51,12 @@ write_status "fetching"
 sudo -u "$RUN_USER" git -C "$PREFIX" fetch --tags --prune
 
 write_status "checking out $TARGET"
-sudo -u "$RUN_USER" git -C "$PREFIX" checkout --quiet "$TARGET"
+# -f discards any local working-tree modifications. The update flow is
+# the canonical way to change versions; if someone has been editing files
+# directly under $PREFIX, those edits are by definition uncommitted and
+# get dropped here. They should have used a dev install (pip -e from a
+# separate clone) instead.
+sudo -u "$RUN_USER" git -C "$PREFIX" checkout -f --quiet "$TARGET"
 
 write_status "installing deps"
 # `pip install -e .` re-resolves pp8k from pyproject.toml — picks up any
