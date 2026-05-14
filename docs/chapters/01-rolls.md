@@ -142,8 +142,12 @@ settings. Below those are the controls you can adjust:
 **Transform**
 : **Fit** preserves the entire source image and pads to the FLM's aspect
   ratio with the background colour. **Fill** crops the source so it covers
-  the full frame without padding. The aspect ratio of the frame itself is
-  fixed by the FLM; you choose how the source is mapped into it.
+  the full frame without padding. **1:1** places the source at its native
+  pixel size — no resampling. If the source is larger than the canvas in
+  either dimension it is centre-cropped, and the card shows an amber
+  warning explaining what was cropped. The aspect ratio of the frame
+  itself is fixed by the FLM; you choose how the source is mapped into
+  it.
 
 **Rotation**
 : Click the curved-arrow icon to rotate the source 90° clockwise. Each
@@ -170,6 +174,22 @@ To remove a single frame, click the trash icon on its card. A
 confirmation dialog appears with the filename and warns that the upload
 and its renders will be deleted.
 
+## Skipping a frame
+
+Use the **X** icon (top of the icon row on a pending frame) to mark the
+frame as **skipped**. Skipped frames stay in the roll for reference but
+the runner walks past them during roll runs. They are visually muted
+(greyscaled thumbnail, dimmed card, italic *Skipped — won't be exposed
+in roll runs* label) so you can tell at a glance that they aren't part
+of the queue.
+
+To bring a skipped frame back into the queue, click the **circled +**
+icon on the card. It returns to `pending`.
+
+Skipping is for frames you want kept in the list but excluded for now —
+say, an alternate crop you might come back to. If you simply don't want
+the frame at all, use **Delete** instead.
+
 ## Frame status
 
 Each card carries a small coloured dot in the top-right corner and a
@@ -181,6 +201,82 @@ matching vertical stripe along its left edge:
 | amber     | `exposing` &mdash; currently on the recorder |
 | green     | `done` &mdash; successfully exposed at least once |
 | red       | `failed` &mdash; the last exposure attempt did not finish |
+| dim grey  | `skipped` &mdash; in the roll but excluded from roll runs |
 
 These statuses are reflected in the count pills on the roll list and
 update live during an exposure run.
+
+## Exposing
+
+There are two ways to expose: one frame at a time from the per-frame
+button, or the whole queue in a sequential roll run.
+
+### Single-frame Expose
+
+On every pending frame card there is a primary **Expose** button. Done
+and failed frames show **Re-expose** or **Retry** in its place. Either
+way, clicking opens a confirmation dialog — the recorder cannot detect
+whether film is actually loaded, so the dialog asks you to confirm that
+it is, with bold text. Cancelling closes the dialog and nothing
+happens. Confirming kicks off the exposure.
+
+While a single frame is exposing, piPalette puts up a **modal** that
+blocks the rest of the page. The modal shows the active phase
+(*Setup*, *Calibrating*, *Exposing R/G/B*, *Finishing*), a progress
+bar, elapsed time, and an ETA. There is no cancel button: an exposure
+cannot be aborted mid-burst without wasting the frame of film, so the
+modal stays in place until the recorder reports the frame complete.
+A typical single-frame exposure takes 60–100 seconds at 4K.
+
+### Roll runs
+
+The roll header has a primary **Start exposing** button (disabled when
+no frames are pending) and a ghost **Stop after current** button
+(hidden until a run is active). Starting opens the same film-loaded
+confirmation; once confirmed, the runner walks every pending frame in
+order, exposing each one through the recorder.
+
+Roll runs are intentionally **non-blocking**. While a run is in
+progress you can navigate to other pages — create new rolls, edit film
+tables, look at the device status — and the runner keeps going on the
+server. The currently-exposing frame card carries a phase + progress
+overlay so it is obvious which frame is active, and a status banner
+under the roll header tracks the overall *N / M done* count.
+
+**Stop after current** is the only halt option. piPalette will let the
+active frame finish (so no film is wasted) and then halt. The banner
+turns yellow and reads *Stopping — finishing current frame* until the
+current burst lands. Resuming is just **Start exposing** again, which
+picks up at the next pending frame. piPalette forces a full
+recalibration on the next start after a stop or error, regardless of
+the *Skip recalibration* setting.
+
+When a run completes, the banner turns green: *Run complete — all
+frames exposed*.
+
+## Re-exposing exposed frames
+
+A frame that is `done` is, from the runner's point of view, finished —
+it is no longer pending and won't be picked up by **Start exposing**.
+There are three ways to re-expose a frame that has already been done:
+
+**Re-expose one frame, now**
+: Click the **Re-expose** button on a done frame. It triggers a
+  single-frame exposure of that frame against the next available
+  film — same modal, same flow as the initial Expose.
+
+**Reset one frame for the next roll run**
+: Click the small refresh icon in the frame's icon row. The frame flips
+  back to `pending` — it stays where it is in the queue, history
+  (exposure count, last-exposed timestamp) is preserved, and the next
+  **Start exposing** will include it. No exposure happens yet.
+
+**Reset every done frame for the next roll run**
+: The roll header gains a **Reset done frames** button whenever the
+  roll has any done frames. Clicking it (with confirmation) flips every
+  done frame in the roll back to `pending` — useful when you want to
+  re-shoot the entire roll on fresh film. Skipped and failed frames are
+  left alone.
+
+In all three cases, the frame's render and source image stay on disk —
+piPalette just clears the *done* flag.

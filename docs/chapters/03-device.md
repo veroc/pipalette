@@ -160,3 +160,61 @@ to the right of the dot summarises the current connection:
 The refresh icon next to the pill forces a fresh status read,
 bypassing piPalette's two-second cache. Use it after physically
 reconnecting cables or power-cycling the recorder.
+
+## System
+
+A fourth panel at the bottom of the Device page surfaces the host's
+piPalette install and offers one-click updates. On a managed install
+(one that came from `deploy/install.sh`) the panel shows:
+
+**Version**
+: The git tag piPalette is currently running from — for example
+  `v0.1.0`. If the host is on a commit past the latest tag the value
+  reads `vX.Y.Z-N-gSHA` (the standard `git describe` shape).
+
+**Commit**
+: The full commit hash, for the times you need to point at exactly
+  what is deployed.
+
+**Install**
+: *Managed (systemd)* on a regular install, *Development* on a
+  checkout you are hacking on directly.
+
+**Last update**
+: The status message left behind by the last update worker — *idle*
+  after a clean run, an error string if something went wrong.
+
+### Checking for updates
+
+Click **Check for updates** in the panel header. piPalette runs
+`git fetch --tags` against `origin` and reports back:
+
+* If the latest tag is the one already running, the panel reads *Up to
+  date — running vX.Y.Z*.
+* If the tag on the remote is newer, the panel shows the new tag,
+  lists the commits between your current `HEAD` and the new tag
+  (newest first, capped at fifty), and offers an **Update now**
+  button.
+
+### Applying an update
+
+**Update now** opens a confirmation that names the target tag and
+warns that the service will restart — make sure no exposure is
+running. Confirming kicks the update flow:
+
+1. piPalette writes the target tag to `/var/lib/pipalette/pending-update`.
+2. The systemd unit `pipalette-update.service` runs as root via the
+   sudoers entry the installer dropped.
+3. The worker fetches, checks out the new tag, reinstalls Python
+   dependencies (including any new pinned pp8k version), and
+   restarts `pipalette.service`.
+
+The browser stays on the page, watching `/api/version`. As soon as the
+service comes back up reporting the new tag, the page reloads
+automatically.
+
+> **Development checkouts cannot update via this button.** If the host
+> is not a managed install — for example a `pip install -e .` from a
+> clone — the **Update now** button is disabled and the panel reads
+> *Development* under *Install*. Update by `git pull` and reinstalling
+> as usual.
