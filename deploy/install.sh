@@ -68,7 +68,8 @@ apt-get install -y -qq \
   avahi-daemon \
   libcap2-bin \
   ca-certificates \
-  curl
+  curl \
+  libvips42t64
 
 ok "apt packages installed"
 

@@ -540,8 +540,11 @@ class RollStore:
 
             canvas.save(out_path, "PNG", optimize=False, compress_level=1)
 
+            # BICUBIC for the thumb is visually indistinguishable from LANCZOS
+            # at 240 px and substantially faster — saves a heavy resampling
+            # pass on the just-rendered 4K/8K canvas.
             thumb = canvas.copy()
-            thumb.thumbnail((THUMB_LONG_EDGE, THUMB_LONG_EDGE), Image.LANCZOS)
+            thumb.thumbnail((THUMB_LONG_EDGE, THUMB_LONG_EDGE), Image.BICUBIC)
             if thumb.mode != "RGB":
                 thumb = thumb.convert("RGB")
             thumb.save(thumb_path, "JPEG", quality=82, optimize=True)
@@ -623,11 +626,10 @@ class RollStore:
             )
 
         # Write the exposure PNG at zlib level 1 (matches the PIL path).
+        # We then thumbnail straight from the just-written file: the OS
+        # page cache keeps the bytes hot, and libvips uses libpng's
+        # shrink-on-load to decode only the rows it needs.
         img.write_to_file(str(out_path), compression=1)
-
-        # Build the thumb via libvips' optimised shrink-on-load path from
-        # the on-disk PNG — typically much faster than going through PIL
-        # because vips can downsample during the libpng read.
         thumb = _pyvips.Image.thumbnail(
             str(out_path), THUMB_LONG_EDGE, height=THUMB_LONG_EDGE,
         )

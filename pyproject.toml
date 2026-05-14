@@ -7,6 +7,11 @@ requires-python = ">=3.10"
 dependencies = [
     "Flask>=3.0",
     "pp8k @ git+https://github.com/veroc/pp8k@v0.7.2",
+    # pyvips is a thin ctypes wrapper around libvips. The render path in
+    # pipalette/rolls.py uses it when libvips42 is available on the host
+    # (installed by deploy/install.sh on Pi) and falls back to PIL when
+    # it isn't, so this stays pulled-in even on hosts without libvips.
+    "pyvips>=3.0",
 ]
 
 [build-system]
