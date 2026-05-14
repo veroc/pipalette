@@ -19,6 +19,18 @@ from pathlib import Path
 import pp8k
 from PIL import Image, ImageOps
 
+# libvips path is optional. When pyvips imports cleanly AND libvips42 is
+# actually loadable we use it for the resize/composite — it's multi-threaded
+# and 2-4× faster on a Pi for the LANCZOS pass that dominates rendering.
+# Otherwise we fall through to PIL with no behaviour change.
+_HAS_VIPS = False
+try:
+    import pyvips as _pyvips
+    _pyvips.version(0)  # forces the libvips.so.42 dlopen
+    _HAS_VIPS = True
+except Exception:
+    _pyvips = None
+
 
 SLOT_MIN = 0
 SLOT_MAX = 19
@@ -439,6 +451,9 @@ class RollStore:
 
         Mirrors pp8k.imaging.image_to_scanlines spatial behaviour so
         the on-disk output matches what the device would receive.
+
+        Dispatches to the libvips implementation when available
+        (multi-threaded, 2-4× faster on ARM), with a PIL fallback.
         """
         roll_dir = self._roll_dir(roll["id"])
         src = roll_dir / "images" / frame["image_filename"]
@@ -449,6 +464,19 @@ class RollStore:
             roll["aspect_w"], roll["aspect_h"], frame["resolution"]
         )
 
+        if _HAS_VIPS:
+            try:
+                self._render_vips(src, out_path, thumb_path, width, height, frame)
+                return
+            except Exception as exc:
+                # Don't lose the frame because of a libvips quirk — fall
+                # through to PIL on any vips error.
+                print(f"[render] pyvips path failed for {frame['id']}: "
+                      f"{type(exc).__name__}: {exc}; falling back to PIL",
+                      flush=True)
+        self._render_pil(src, out_path, thumb_path, width, height, frame)
+
+    def _render_pil(self, src, out_path, thumb_path, width, height, frame):
         with Image.open(src) as img:
             img = ImageOps.exif_transpose(img) or img
             if frame["rotation"] == 90:
@@ -517,6 +545,93 @@ class RollStore:
             if thumb.mode != "RGB":
                 thumb = thumb.convert("RGB")
             thumb.save(thumb_path, "JPEG", quality=82, optimize=True)
+
+    def _render_vips(self, src, out_path, thumb_path, width, height, frame):
+        """libvips path — same geometry as _render_pil, multi-threaded.
+
+        libvips composes a lazy pipeline; the heavy lifting only runs at
+        write_to_file time, allowing the resize / embed / save to fuse.
+
+        Note: we *don't* set access="sequential". `autorot` and per-frame
+        rotation (rot90/270) need to read the source out of top-to-bottom
+        order, which a sequential JPEG decoder can't service — it errors
+        with "out of order read at line N". The default random-access
+        mode handles every input cleanly at the cost of higher peak RAM.
+        """
+        img = _pyvips.Image.new_from_file(str(src))
+        img = img.autorot()  # respect EXIF orientation (PIL ImageOps.exif_transpose equivalent)
+
+        # libvips rot90() is clockwise; matches our frame.rotation semantics.
+        if frame["rotation"] == 90:
+            img = img.rot90()
+        elif frame["rotation"] == 180:
+            img = img.rot180()
+        elif frame["rotation"] == 270:
+            img = img.rot270()
+
+        # Force sRGB — handles grayscale / CMYK / other spaces into 3-band RGB.
+        img = img.colourspace("srgb")
+        # Drop alpha if present (matches PIL convert("RGB") for RGBA).
+        if img.hasalpha():
+            img = img.extract_band(0, n=3)
+
+        bg_pixel = [0, 0, 0] if frame["background"] == "black" else [255, 255, 255]
+
+        # Cleared on every render — a previous 1:1 crop might no longer apply.
+        frame["transform_warning"] = None
+
+        if frame["transform"] == "1to1":
+            src_w, src_h = img.width, img.height
+            if src_w > width or src_h > height:
+                crop_w = min(src_w, width)
+                crop_h = min(src_h, height)
+                left = (src_w - crop_w) // 2
+                top = (src_h - crop_h) // 2
+                img = img.crop(left, top, crop_w, crop_h)
+                frame["transform_warning"] = (
+                    f"Source {src_w}×{src_h} px exceeds the "
+                    f"{frame['resolution'].upper()} canvas "
+                    f"({width}×{height} px) — center-cropped."
+                )
+        else:
+            img_ratio = img.width / img.height
+            frame_ratio = width / height
+            if frame["transform"] == "fill":
+                if img_ratio > frame_ratio:
+                    factor = height / img.height
+                else:
+                    factor = width / img.width
+            else:  # fit
+                if img_ratio > frame_ratio:
+                    factor = width / img.width
+                else:
+                    factor = height / img.height
+            img = img.resize(factor, kernel="lanczos3")
+
+        # Place the (possibly oversized in 'fill') image onto the canvas.
+        # For fill: centre-crop the overflow. For fit / 1:1: centre with bg.
+        if frame["transform"] == "fill" and (img.width > width or img.height > height):
+            left = (img.width - width) // 2
+            top = (img.height - height) // 2
+            img = img.crop(left, top, width, height)
+        else:
+            x = (width - img.width) // 2
+            y = (height - img.height) // 2
+            img = img.embed(
+                x, y, width, height,
+                extend="background", background=bg_pixel,
+            )
+
+        # Write the exposure PNG at zlib level 1 (matches the PIL path).
+        img.write_to_file(str(out_path), compression=1)
+
+        # Build the thumb via libvips' optimised shrink-on-load path from
+        # the on-disk PNG — typically much faster than going through PIL
+        # because vips can downsample during the libpng read.
+        thumb = _pyvips.Image.thumbnail(
+            str(out_path), THUMB_LONG_EDGE, height=THUMB_LONG_EDGE,
+        )
+        thumb.write_to_file(str(thumb_path), Q=82)
 
 
 # ---- helpers ------------------------------------------------------------
