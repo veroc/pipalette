@@ -427,6 +427,30 @@ def create_app(data_dir=None):
             return ("", 404)
         return ("", 204) if ok else ("", 404)
 
+    @app.route("/api/rolls/<roll_id>/frames/<frame_id>/reset", methods=["POST"])
+    def api_frame_reset(roll_id, frame_id):
+        """Flip a done/failed frame back to pending so the next roll run
+        re-queues it. History (exposure_count, exposed_at) is preserved.
+        Refused while the runner is busy on this frame."""
+        state = runner.state()
+        if state.get("busy") and state.get("frame_id") == frame_id:
+            return jsonify({"error": "frame is currently exposing"}), 409
+        roll = rolls.get(roll_id)
+        if roll is None:
+            return jsonify({"error": "roll not found"}), 404
+        frame = next((f for f in roll["frames"] if f["id"] == frame_id), None)
+        if frame is None:
+            return jsonify({"error": "frame not found"}), 404
+        if frame["status"] not in ("done", "failed"):
+            return jsonify({
+                "error": f"can't reset a {frame['status']} frame",
+            }), 409
+        rolls.set_frame_status(roll_id, frame_id, "pending", error=None)
+        runner._publish("frame_status", {
+            "roll_id": roll_id, "frame_id": frame_id, "status": "pending",
+        })
+        return jsonify({"frame_id": frame_id, "status": "pending"})
+
     @app.route("/api/rolls/<roll_id>/frames/<frame_id>/skip-toggle", methods=["POST"])
     def api_frame_skip_toggle(roll_id, frame_id):
         """Flip a frame between 'pending' and 'skipped'. Only those two
@@ -520,6 +544,29 @@ def create_app(data_dir=None):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"started": roll_id}), 202
+
+    @app.route("/api/rolls/<roll_id>/reset-done", methods=["POST"])
+    def api_roll_reset_done(roll_id):
+        """Flip all 'done' frames back to 'pending' so the next roll run
+        re-exposes them. History (exposure_count, exposed_at) is preserved.
+        Skipped/failed/exposing frames are intentionally left alone."""
+        state = runner.state()
+        if state.get("busy") and state.get("roll_id") == roll_id:
+            return jsonify({"error": "can't reset while this roll is running"}), 409
+        roll = rolls.get(roll_id)
+        if roll is None:
+            return jsonify({"error": "roll not found"}), 404
+        reset_ids = []
+        for f in roll["frames"]:
+            if f["status"] == "done":
+                rolls.set_frame_status(roll_id, f["id"], "pending", error=None)
+                runner._publish("frame_status", {
+                    "roll_id": roll_id, "frame_id": f["id"], "status": "pending",
+                })
+                reset_ids.append(f["id"])
+        # Reset recalibrate_next so the next run starts with a fresh cal cycle.
+        rolls.set_roll_field(roll_id, "recalibrate_next", True)
+        return jsonify({"reset": len(reset_ids), "frame_ids": reset_ids})
 
     @app.route("/api/rolls/<roll_id>/stop", methods=["POST"])
     def api_roll_stop(roll_id):

@@ -533,7 +533,11 @@
       var holder = document.createElement("div");
       holder.innerHTML = html.trim();
       var card = holder.firstElementChild;
-      if (card) grid.appendChild(card);
+      if (card) {
+        grid.appendChild(card);
+        // New pending frame — update the Start button's enabled state.
+        syncStartButton(rollId);
+      }
     } catch (err) {
       console.warn("partial fetch failed", err);
     }
@@ -782,6 +786,10 @@
       ev.preventDefault();
       var card4 = target.closest(".frame-card");
       if (card4) toggleSkipFrame(card4.dataset.rollId, card4.dataset.frameId);
+    } else if (action === "reset-frame") {
+      ev.preventDefault();
+      var card5 = target.closest(".frame-card");
+      if (card5) resetFrame(card5.dataset.rollId, card5.dataset.frameId);
     } else if (action === "start-roll") {
       ev.preventDefault();
       // Recompute from the live DOM so skip toggles are reflected.
@@ -790,6 +798,10 @@
     } else if (action === "stop-roll") {
       ev.preventDefault();
       stopRoll(target.dataset.rollId);
+    } else if (action === "reset-done") {
+      ev.preventDefault();
+      resetDoneFrames(target.dataset.rollId,
+                      parseInt(target.dataset.doneCount, 10) || 0);
     } else if (action === "update-check") {
       ev.preventDefault();
       checkForUpdates(target);
@@ -798,6 +810,20 @@
       applyUpdate(target.dataset.target);
     }
   });
+
+  // -------- reset frame ----------------------------------------------
+
+  async function resetFrame(rollId, frameId) {
+    try {
+      await jsonFetch(
+        "/api/rolls/" + rollId + "/frames/" + frameId + "/reset",
+        { method: "POST" },
+      );
+      await refreshFrameCard(rollId, frameId);
+    } catch (err) {
+      toast("Couldn't reset frame: " + err.message, "err");
+    }
+  }
 
   // -------- skip toggle ----------------------------------------------
 
@@ -886,10 +912,20 @@
 
   function syncStartButton(rollId) {
     var btn = document.querySelector('[data-action="start-roll"][data-roll-id="' + rollId + '"]');
+    if (btn) {
+      var pending = $$('.frame-card[data-frame-status="pending"]').length;
+      btn.disabled = pending === 0;
+      btn.dataset.pendingCount = String(pending);
+    }
+    syncResetDoneButton(rollId);
+  }
+
+  function syncResetDoneButton(rollId) {
+    var btn = document.querySelector('[data-action="reset-done"][data-roll-id="' + rollId + '"]');
     if (!btn) return;
-    var pending = $$('.frame-card[data-frame-status="pending"]').length;
-    btn.disabled = pending === 0;
-    btn.dataset.pendingCount = String(pending);
+    var done = $$('.frame-card[data-frame-status="done"]').length;
+    btn.hidden = done === 0;
+    btn.dataset.doneCount = String(done);
   }
 
   // On load: connect to SSE if there's a roll panel on the page. The
@@ -984,11 +1020,14 @@
         hideFrameProgressOverlay(card.dataset.frameId);
       });
       setRunButtons(pageRollId, "idle");
-      var counts2 = countFrameStates();
-      // Only paint a final banner if there's been activity. If the
-      // banner is already hidden, leave it hidden.
+      // Defer counting until after pending refreshFrameCard fetches (kicked
+      // off by frame_status events) have had a chance to land. Without this,
+      // the last frame's card still reads "pending" and we mislabel a clean
+      // run as "halted".
       var banner = document.querySelector("[data-run-status]");
-      if (banner && !banner.hidden) {
+      if (!banner || banner.hidden) return;
+      setTimeout(function () {
+        var counts2 = countFrameStates();
         if (counts2.remaining === 0 && counts2.total > 0) {
           setRunStatus(pageRollId, {
             level: "done",
@@ -1003,7 +1042,7 @@
                       counts2.remaining + " remaining",
           });
         }
-      }
+      }, 600);
     }
   }
 
@@ -1187,6 +1226,29 @@
       // SSE state event will drive the rest.
     } catch (err) {
       toast("Couldn't start: " + err.message, "err");
+    }
+  }
+
+  async function resetDoneFrames(rollId, doneCount) {
+    if (!doneCount) return;
+    var ok = await confirmDialog({
+      title: "Reset done frames?",
+      messageNodes: buildNodes([
+        "Re-queue ", strong(doneCount + " exposed frame" + (doneCount === 1 ? "" : "s")),
+        " for the next roll run. The frames stay in the roll; only the ‘done’ flag is cleared so the runner picks them up again. Exposure history is preserved.",
+      ]),
+      confirmLabel: "Reset",
+    });
+    if (!ok) return;
+    try {
+      var res = await jsonFetch("/api/rolls/" + rollId + "/reset-done", {
+        method: "POST",
+      });
+      toast("Reset " + res.reset + " frame" + (res.reset === 1 ? "" : "s") + " to pending", "ok");
+      // SSE frame_status events fire for each reset frame and trigger
+      // refreshFrameCard, which syncs the buttons. Nothing else to do here.
+    } catch (err) {
+      toast("Reset failed: " + err.message, "err");
     }
   }
 

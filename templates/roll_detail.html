@@ -22,6 +22,7 @@
     </div>
     <div class="panel-actions">
       {% set pending_count = roll.frames | selectattr('status', 'equalto', 'pending') | list | length %}
+      {% set done_count = roll.frames | selectattr('status', 'equalto', 'done') | list | length %}
       <button type="button" class="btn btn-primary"
               data-action="start-roll"
               data-roll-id="{{ roll.id }}"
@@ -40,6 +41,17 @@
           <rect x="5" y="5" width="10" height="10" rx="1"/>
         </svg>
         <span>Stop after current</span>
+      </button>
+      <button type="button" class="btn btn-ghost"
+              data-action="reset-done"
+              data-roll-id="{{ roll.id }}"
+              data-done-count="{{ done_count }}"
+              {{ '' if done_count else 'hidden' }}>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M16 4v4h-4"/>
+          <path d="M16 8a6 6 0 1 0-1.6 5"/>
+        </svg>
+        <span>Reset done frames</span>
       </button>
       <button type="button" class="btn btn-ghost btn-danger" data-action="delete-roll">Delete roll</button>
     </div>
