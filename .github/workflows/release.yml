@@ -1,0 +1,72 @@
+name: Build manual + release
+
+# When this workflow runs:
+#  - on every push to master (uploads PDF as a downloadable artifact for inspection)
+#  - on every push of a v* tag (uploads PDF AND creates a GitHub Release)
+#  - on pull requests targeting master (uploads PDF artifact for review)
+#  - on demand via the Actions UI ("Run workflow" button)
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+# Needed by softprops/action-gh-release to create the Release on tag pushes.
+# Default GITHUB_TOKEN is read-only.
+permissions:
+  contents: write
+
+jobs:
+  build-manual:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so `git for-each-ref` can read tag annotations.
+          fetch-depth: 0
+
+      - name: Install pandoc, xelatex, fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pandoc \
+            texlive-xetex \
+            texlive-fonts-recommended \
+            texlive-latex-extra \
+            texlive-pictures \
+            fonts-inter \
+            fonts-dejavu-mono
+
+      - name: Build the manual
+        run: bash docs/build.sh
+
+      - name: Upload PDF as workflow artifact
+        # Always runs — gives you a downloadable PDF for every push / PR / dispatch,
+        # not just for tag-driven releases. 30-day retention is plenty for review.
+        uses: actions/upload-artifact@v4
+        with:
+          name: piPalette-Manual
+          path: docs/build/piPalette-Manual.pdf
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Extract tag annotation for Release body
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # `%(contents)` preserves the full annotation text, including
+          # newlines, exactly as written when the tag was created.
+          git for-each-ref --format='%(contents)' "$GITHUB_REF" > .release-body.txt
+          # If the annotation is empty (lightweight tag, etc.), fall back
+          # to the tag name so the release still has a body.
+          [ -s .release-body.txt ] || echo "Release ${GITHUB_REF##*/}" > .release-body.txt
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: .release-body.txt
+          files: docs/build/piPalette-Manual.pdf
+          fail_on_unmatched_files: true
