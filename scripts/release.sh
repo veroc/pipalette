@@ -11,10 +11,22 @@
 #   1. Pre-flight checks (clean working tree, on master, in sync with origin).
 #   2. Computes the next version from the latest v* tag.
 #   3. Shows commits since the last tag, asks you to confirm.
-#   4. Opens $EDITOR with a pre-filled annotation (bullet list of subjects).
+#   4. Opens $EDITOR with a pre-filled annotation grouped by prefix.
 #   5. Creates the annotated tag and pushes it.
 #   6. GHA's release.yml workflow picks it up — builds the PDF, publishes
 #      the GitHub Release, attaches the PDF. Nothing else local to do.
+#
+# Commit prefix convention (drives the release-note grouping):
+#   new:      a feature users will notice          → ## New
+#   fix:      a bug users were hitting             → ## Fixed
+#   improve:  perf, UX polish, refactor with user-visible effect → ## Improved
+#   docs:     manual / README / in-app copy        → ## Documentation
+#   internal: CI, release tooling, dev scripts     → hidden from release notes
+#   (anything else)                                → ## Other
+#
+# The prefix is parsed off when grouping, so a commit
+# "fix: snapshot live FileList" becomes "- snapshot live FileList"
+# under "## Fixed" in the annotation. Edit further in $EDITOR before tagging.
 
 set -euo pipefail
 
@@ -124,15 +136,57 @@ read -rp "Continue? [y/N] " yn
 TMPFILE="$(mktemp)"
 trap 'rm -f "$TMPFILE"' EXIT
 
+# Group commit subjects by their conventional prefix so the annotation
+# starts as a readable, user-facing summary instead of a flat dev log.
+group_commits_by_prefix() {
+  local range="$1"
+  local -a new=() fixed=() improved=() docs=() other=()
+
+  while IFS= read -r subject; do
+    [[ -z "$subject" ]] && continue
+    case "$subject" in
+      new:*)
+        new+=("${subject#new:}") ;;
+      fix:*)
+        fixed+=("${subject#fix:}") ;;
+      improve:*)
+        improved+=("${subject#improve:}") ;;
+      docs:*)
+        docs+=("${subject#docs:}") ;;
+      internal:*)
+        # intentionally hidden — internal commits don't belong in
+        # user-facing release notes (CI, release tooling, etc.)
+        ;;
+      *)
+        other+=("$subject") ;;
+    esac
+  done < <(git log $range --pretty=format:'%s' --no-merges)
+
+  emit_section() {
+    local title="$1"; shift
+    local -a items=("$@")
+    if (( ${#items[@]} )); then
+      printf '## %s\n' "$title"
+      printf -- '- %s\n' "${items[@]/# /}"  # trim leading space if any
+      echo
+    fi
+  }
+  emit_section "New" "${new[@]}"
+  emit_section "Fixed" "${fixed[@]}"
+  emit_section "Improved" "${improved[@]}"
+  emit_section "Documentation" "${docs[@]}"
+  emit_section "Other" "${other[@]}"
+}
+
 {
   echo "piPalette $NEXT_TAG"
   echo
   if [[ -n "$LAST_TAG" ]]; then
-    git log "$LAST_TAG..HEAD" --pretty=format:'- %s' --no-merges
+    group_commits_by_prefix "$LAST_TAG..HEAD"
   else
-    git log --pretty=format:'- %s' --no-merges | head -50
+    # No previous tag — group everything; cap at 50 commits for sanity.
+    group_commits_by_prefix "-n 50"
   fi
-  echo
 } > "$TMPFILE"
 
 EDITOR_CMD="${EDITOR:-nano}"
