@@ -18,6 +18,12 @@ on:
 permissions:
   contents: write
 
+# GitHub is migrating JavaScript actions from Node 20 → 24 (Node 20 leaves
+# the runners in Sep 2026). Opt in now to silence the deprecation warning
+# and skip the eventual forced flip.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build-manual:
     runs-on: ubuntu-latest
