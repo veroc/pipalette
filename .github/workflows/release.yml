@@ -31,8 +31,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Full history so `git for-each-ref` can read tag annotations.
           fetch-depth: 0
+          # Without this, actions/checkout creates lightweight tag refs
+          # but doesn't fetch the annotated tag *objects*. `%(contents)`
+          # then falls back to the commit subject, which is the wrong
+          # body for the Release page.
+          fetch-tags: true
 
       - name: Install pandoc, xelatex, fonts
         run: |
@@ -62,12 +66,26 @@ jobs:
       - name: Extract tag annotation for Release body
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          # `%(contents)` preserves the full annotation text, including
-          # newlines, exactly as written when the tag was created.
-          git for-each-ref --format='%(contents)' "$GITHUB_REF" > .release-body.txt
-          # If the annotation is empty (lightweight tag, etc.), fall back
-          # to the tag name so the release still has a body.
-          [ -s .release-body.txt ] || echo "Release ${GITHUB_REF##*/}" > .release-body.txt
+          # Belt and braces: explicitly pull tag objects in case the
+          # checkout step somehow ended up with only lightweight refs.
+          git fetch --tags --force origin
+
+          TAG_NAME="${GITHUB_REF##refs/tags/}"
+          TAG_TYPE="$(git cat-file -t "$TAG_NAME")"
+
+          if [[ "$TAG_TYPE" == "tag" ]]; then
+            # Annotated tag — the contents after the first blank line is
+            # the body. Drops the header section that git cat-file prints.
+            git cat-file -p "$TAG_NAME" | sed '1,/^$/d' > .release-body.txt
+          else
+            # Lightweight tag (no annotation) — fall back to a one-liner
+            # so the Release still has a meaningful body.
+            echo "Release $TAG_NAME" > .release-body.txt
+          fi
+
+          echo "--- release body ---"
+          cat .release-body.txt
+          echo "--- end ---"
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
