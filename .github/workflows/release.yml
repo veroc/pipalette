@@ -1,16 +1,12 @@
 name: Build manual + release
 
-# When this workflow runs:
-#  - on every push to master (uploads PDF as a downloadable artifact for inspection)
-#  - on every push of a v* tag (uploads PDF AND creates a GitHub Release)
-#  - on pull requests targeting master (uploads PDF artifact for review)
-#  - on demand via the Actions UI ("Run workflow" button)
+# Runs only on:
+#  - push of a v* tag (builds the PDF and creates the GitHub Release)
+#  - manual fire from the Actions UI ("Run workflow" button) — useful
+#    for dry-running the PDF build without cutting a release
 on:
   push:
-    branches: [master]
     tags: ['v*']
-  pull_request:
-    branches: [master]
   workflow_dispatch:
 
 # Needed by softprops/action-gh-release to create the Release on tag pushes.
