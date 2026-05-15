@@ -11,7 +11,8 @@
 #   1. Pre-flight checks (clean working tree, on master, in sync with origin).
 #   2. Computes the next version from the latest v* tag.
 #   3. Shows commits since the last tag, asks you to confirm.
-#   4. Opens $EDITOR with a pre-filled annotation grouped by prefix.
+#   4. Opens $EDITOR (or vim, if unset) with a pre-filled annotation
+#      grouped by prefix.
 #   5. Creates the annotated tag and pushes it.
 #   6. GHA's release.yml workflow picks it up — builds the PDF, publishes
 #      the GitHub Release, attaches the PDF. Nothing else local to do.
@@ -189,7 +190,7 @@ group_commits_by_prefix() {
   fi
 } > "$TMPFILE"
 
-EDITOR_CMD="${EDITOR:-nano}"
+EDITOR_CMD="${EDITOR:-vim}"
 "$EDITOR_CMD" "$TMPFILE"
 
 # Sanity-check: annotation must have some non-whitespace, non-comment content.
