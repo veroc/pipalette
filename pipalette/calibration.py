@@ -219,6 +219,88 @@ def _inverse_at(densities, pixels, target_d):
 
 
 # ---------------------------------------------------------------------------
+# Monotonic-cubic spline (Fritsch-Carlson PCHIP)
+# ---------------------------------------------------------------------------
+# Densitometer readings always have a few non-monotonic dips per roll
+# (±0.02 is typical noise).  Piecewise-linear inversion preserves those
+# wiggles in the corrected LUT.  Building a Fritsch-Carlson monotone
+# cubic through the measurements absorbs the noise and yields a clean
+# curve without introducing oscillations between knots.
+
+def _running_max(values):
+    """Clamp to non-decreasing by raising each entry to the prior max.
+    Densitometer dips get flattened; legitimate growth is preserved."""
+    out = []
+    m = values[0]
+    for v in values:
+        if v > m:
+            m = v
+        out.append(m)
+    return out
+
+
+def _pchip_slopes(xs, ys):
+    """Fritsch-Carlson interior tangents that preserve monotonicity."""
+    n = len(xs)
+    h = [xs[i + 1] - xs[i] for i in range(n - 1)]
+    s = [(ys[i + 1] - ys[i]) / h[i] if h[i] else 0.0 for i in range(n - 1)]
+    m = [0.0] * n
+    # One-sided endpoint slopes are good enough for our wedge density.
+    m[0] = s[0]
+    m[-1] = s[-1]
+    for i in range(1, n - 1):
+        if s[i - 1] * s[i] <= 0:
+            m[i] = 0.0
+            continue
+        w1 = 2 * h[i] + h[i - 1]
+        w2 = h[i] + 2 * h[i - 1]
+        m[i] = (w1 + w2) / (w1 / s[i - 1] + w2 / s[i])
+    return m, h
+
+
+def _pchip_eval(xs, ys, slopes, h, x):
+    """Evaluate the PCHIP at x using Hermite cubic basis functions."""
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    # Linear scan -- 31 knots, fast enough.
+    for i in range(len(xs) - 1):
+        if xs[i] <= x <= xs[i + 1]:
+            t = (x - xs[i]) / h[i]
+            t2, t3 = t * t, t * t * t
+            h00 = 2 * t3 - 3 * t2 + 1
+            h10 = t3 - 2 * t2 + t
+            h01 = -2 * t3 + 3 * t2
+            h11 = t3 - t2
+            return (h00 * ys[i] + h10 * h[i] * slopes[i] +
+                    h01 * ys[i + 1] + h11 * h[i] * slopes[i + 1])
+    return ys[-1]
+
+
+def _pchip_inverse(xs, ys, slopes, h, target_y):
+    """Find x in [xs[0], xs[-1]] such that pchip(x) == target_y.
+
+    Bisects within the segment that brackets target_y."""
+    if target_y <= ys[0]:
+        return float(xs[0])
+    if target_y >= ys[-1]:
+        return float(xs[-1])
+    # Find bracketing segment (ys monotone non-decreasing post-running_max).
+    for i in range(len(xs) - 1):
+        if ys[i] <= target_y <= ys[i + 1]:
+            lo, hi = xs[i], xs[i + 1]
+            for _ in range(40):                # 40 iters -> ~1e-12 tolerance
+                mid = 0.5 * (lo + hi)
+                if _pchip_eval(xs, ys, slopes, h, mid) < target_y:
+                    lo = mid
+                else:
+                    hi = mid
+            return 0.5 * (lo + hi)
+    return float(xs[-1])
+
+
+# ---------------------------------------------------------------------------
 # Empirical LUT inversion
 # ---------------------------------------------------------------------------
 
@@ -243,22 +325,26 @@ def correct_lut(old_lut_display, measurements,
     """
     if len(old_lut_display) != 256:
         raise ValueError("old_lut_display must be 256 entries")
-    px = [m[0] for m in measurements]
-    dens = [m[1] for m in measurements]
+    px = [float(m[0]) for m in measurements]
+    raw_dens = [float(m[1]) for m in measurements]
     if px != sorted(px):
         raise ValueError("measurements must be in increasing pixel order")
 
-    b_plus_f = min(dens)
+    # Densitometer dips (small non-monotonic readings from measurement
+    # noise) would otherwise propagate into the corrected LUT as visible
+    # kinks.  Force monotonic non-decreasing then fit a Fritsch-Carlson
+    # PCHIP through the cleaned points -- C1-smooth, no overshoot, and
+    # invertible by bisection within each segment.
+    dens = _running_max(raw_dens)
+    slopes, h = _pchip_slopes(px, dens)
+
+    b_plus_f = dens[0]
     total_range = target_range + SPEED_POINT_OFFSET
 
-    # Build the new LUT.
     new_lut = [0] * 256
     for x in range(256):
         target_d = b_plus_f + (x / 255.0) * total_range
-        y_inv = _inverse_at(dens, px, target_d)
-        if y_inv is None:
-            # Target outside measured range -- clip to nearest edge.
-            y_inv = px[-1] if target_d > dens[-1] else px[0]
+        y_inv = _pchip_inverse(px, dens, slopes, h, target_d)
         y_clamped = max(0.0, min(255.0, y_inv))
         # Sample OLD LUT at fractional index via linear interpolation.
         lo = int(math.floor(y_clamped))
