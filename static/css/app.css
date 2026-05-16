@@ -1281,3 +1281,9 @@ select.input { height: 32px; padding-right: 24px; }
   border-radius: 50%;
   animation: spin 700ms linear infinite;
 }
+.cal-progress-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-2);
+  min-height: 14px;
+}

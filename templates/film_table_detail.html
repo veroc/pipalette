@@ -105,10 +105,13 @@
 </section>
 
 {% if cal_state != 'none' %}
+{% set exposed_count = (cal_roll.frames | selectattr('status', 'in', ['done', 'skipped', 'failed']) | list | length) if cal_roll else 0 %}
 <section class="panel" data-calibration-panel
          data-roll-id="{{ cal_roll.id }}"
          data-profile-id="{{ profile.id }}"
-         data-cal-state="{{ cal_state }}">
+         data-cal-state="{{ cal_state }}"
+         data-cal-done-frames="{{ exposed_count }}"
+         data-cal-total-frames="{{ cal_roll.frames | length if cal_roll else 33 }}">
   <header class="panel-head">
     <div>
       <h2 class="panel-title">Calibration in progress</h2>

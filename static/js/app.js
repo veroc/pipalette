@@ -876,9 +876,13 @@
   }
 
   function calOpenProgress(panel) {
-    // Minimal progress modal that subscribes to the runner SSE stream
-    // and updates per-frame status.  Reuses the existing event source.
     var rollId = panel.dataset.rollId;
+    // Bootstrap done-frame count from the panel (rendered server-side
+    // from the roll's frame statuses).  This means a mid-exposure
+    // reload of the FLM page gives the modal a correct starting point.
+    var totalFrames = parseInt(panel.dataset.calTotalFrames || "33", 10);
+    var doneFrames  = parseInt(panel.dataset.calDoneFrames  || "0",  10);
+
     var backdrop = document.createElement("div");
     backdrop.className = "modal-backdrop";
     backdrop.innerHTML =
@@ -891,6 +895,7 @@
           '<div class="cal-progress" data-cal-progress>' +
             '<div class="cal-progress-bar"><div class="cal-progress-fill" style="width:0%"></div></div>' +
             '<div class="cal-progress-text" data-cal-progress-text>Waiting…</div>' +
+            '<div class="cal-progress-sub" data-cal-progress-sub></div>' +
           '</div>' +
         '</div>' +
         '<div class="modal-foot">' +
@@ -899,53 +904,69 @@
       '</div>';
     document.body.appendChild(backdrop);
 
-    var fill = backdrop.querySelector(".cal-progress-fill");
+    var fill   = backdrop.querySelector(".cal-progress-fill");
     var textEl = backdrop.querySelector("[data-cal-progress-text]");
+    var subEl  = backdrop.querySelector("[data-cal-progress-sub]");
 
-    function update(done, total, msg) {
-      var pct = total > 0 ? Math.round(done / total * 100) : 0;
+    function render() {
+      var pct = totalFrames > 0 ? Math.round(doneFrames / totalFrames * 100) : 0;
       fill.style.width = pct + "%";
-      textEl.textContent = (msg || ("Frame " + done + " / " + total)) + "  (" + pct + "%)";
+      textEl.textContent = "Frame " + doneFrames + " / " + totalFrames + "  (" + pct + "%)";
     }
+    render();
 
-    // Pull initial state.
-    fetch("/api/rolls/" + rollId).then(function (r) { return r.json(); }).catch(function () { return null; });
-
-    // Subscribe to SSE.  Re-use the global runner stream; filter on roll_id.
     var es = new EventSource("/api/runner/events");
-    var doneFrames = 0;
-    var totalFrames = 33;
+
+    // State events carry no per-roll count (only busy/mode/roll_id/
+    // frame_id/stopping).  We use them only to detect completion --
+    // never to overwrite our tracked counter.
     es.addEventListener("state", function (e) {
       try {
         var s = JSON.parse(e.data);
-        if (s.roll_id === rollId) {
-          totalFrames = s.total || 33;
-          doneFrames = s.completed || 0;
-          update(doneFrames, totalFrames);
+        if (s.roll_id === rollId && s.busy === false) {
+          // Roll finished.
+          subEl.textContent = "Done. Reloading…";
+          es.close();
+          setTimeout(function () { location.reload(); }, 600);
         }
       } catch (_) {}
     });
+
     es.addEventListener("frame_status", function (e) {
       try {
         var s = JSON.parse(e.data);
         if (s.roll_id !== rollId) return;
         if (s.status === "done" || s.status === "skipped" || s.status === "failed") {
           doneFrames++;
-          update(doneFrames, totalFrames);
+          render();
           if (doneFrames >= totalFrames) {
+            subEl.textContent = "Done. Reloading…";
             es.close();
-            setTimeout(function () { location.reload(); }, 500);
+            setTimeout(function () { location.reload(); }, 600);
           }
-        } else if (s.status === "exposing") {
-          update(doneFrames, totalFrames, "Exposing frame " + (doneFrames + 1) + " / " + totalFrames);
         }
       } catch (_) {}
     });
 
-    function close() {
-      es.close();
-      backdrop.remove();
-    }
+    // Within-frame progress: channel + line count + ETA.  Updates ~1 Hz
+    // so the modal feels alive even during a single ~80s frame.
+    es.addEventListener("progress", function (e) {
+      try {
+        var p = JSON.parse(e.data);
+        if (p.roll_id !== rollId) return;
+        var bits = ["Exposing frame " + (doneFrames + 1) + " · " + (p.channel || "")];
+        if (p.lines_total) {
+          var pct = Math.round(100 * p.lines_sent / p.lines_total);
+          bits.push("line " + p.lines_sent + " / " + p.lines_total + " (" + pct + "%)");
+        }
+        if (p.eta_seconds != null) {
+          bits.push("ETA " + Math.round(p.eta_seconds) + "s");
+        }
+        subEl.textContent = bits.join("  ·  ");
+      } catch (_) {}
+    });
+
+    function close() { es.close(); backdrop.remove(); }
     backdrop.querySelector("[data-cal-progress-close]").addEventListener("click", close);
     backdrop.addEventListener("click", function (ev) {
       if (ev.target === backdrop) close();
