@@ -37,6 +37,13 @@ PAPER_GRADE_RANGE = {0: 1.60, 1: 1.40, 2: 1.05, 3: 0.95, 4: 0.85, 5: 0.70}
 # Speed-point offset above b+f (ISO 6:1993 standard).
 SPEED_POINT_OFFSET = 0.10
 
+# Pixel value at which Zone I lands.  256 input levels divide cleanly
+# into ~9 photographic zones (Zone 0 paper-black to Zone IX paper-white);
+# Zone I sits one zone-width above Zone 0 at pixel ~25.  The calibrated
+# LUT anchors the speed point exactly here, with pixels 0..25 forming
+# the toe (Zone 0, paper-black).
+ZONE_I_PIXEL = 25
+
 # Default test wedge: 31 patches spanning the 8-bit input range linearly.
 # Matches Stouffer T3110 granularity (0.10 log density per step when the
 # LUT lands correctly across the 3.0 range).
@@ -124,53 +131,37 @@ def diagnose(measurements, target_range=PAPER_GRADE_RANGE[2]):
 
     shortfall = max(0.0, target_range - working_range)
 
-    # Per-step error vs target curve (detects shape problems even when
-    # the overall range is correct, e.g. toe shortfall + correct d_max).
-    target_total = target_range + SPEED_POINT_OFFSET
+    # Per-step error vs target curve.  Target uses the same two-region
+    # shape that correct_lut produces (toe up to ZONE_I_PIXEL, working
+    # range above).  Detects shape mismatches even when the overall
+    # range is on target.
     max_step_err = 0.0
     for px_val, d_meas in measurements:
-        target_d = b_plus_f + (px_val / 255.0) * target_total
+        target_d = next(_target_pairs([px_val], b_plus_f, target_range))[1]
         err = abs(d_meas - target_d)
         if err > max_step_err:
             max_step_err = err
 
-    # Verdict selection.
-    if shortfall < 0.03 and max_step_err < 0.05:
+    # Verdict selection.  Two cases that matter photographically:
+    #
+    # - 'shouldered': curve has rolled off at the top, film + developer
+    #   can't deliver the full working range no matter what the LUT
+    #   does.  Recommend longer development (time_multiplier) or harder
+    #   paper grade.
+    # - 'ok' / 'lut_fixable': all corrections are LUT-shape work that
+    #   the calibration apply step handles.  We don't report an "EI
+    #   shift" -- the LUT amplitude IS the exposure control in our
+    #   system, and the corrected LUT bakes that adjustment in.
+    if shouldered and shortfall >= 0.03:
+        verdict = "shouldered"
+        time_multiplier = (target_range / working_range
+                          if working_range > 0 else None)
+    elif shortfall < 0.03 and max_step_err < 0.05:
         verdict = "ok"
         time_multiplier = None
-        ei_multiplier = None
     else:
-        # Check for uniform offset (global underexposure): does shifting
-        # the input axis line every measured density up with its target?
-        # Look at offsets in the *middle* of the response curve only --
-        # near the edges, target densities can fall outside the measured
-        # range and the inverse-lookup clips, which we'd misread as a
-        # smaller spread.
-        offsets = []
-        for px_val, target_d in _target_pairs(px, b_plus_f, target_range):
-            inv_x = _inverse_at(dens, px, target_d)
-            if inv_x is None: continue
-            # Skip points where inv_x hit the clip at either edge.
-            if inv_x <= px[0] + 0.5 or inv_x >= px[-1] - 0.5: continue
-            offsets.append(inv_x - px_val)
-        # Tight spread of offsets => uniform shift => global EI issue.
-        if len(offsets) >= 3 and (max(offsets) - min(offsets)) < 8:
-            verdict = "global_underexposure"
-            # Average input-axis shift -> EI multiplier estimate.
-            # If the curve sits 20 pixels higher than the target, input
-            # needs ~20/255 less to land right -- equivalent to lowering
-            # EI by (255 + avg_shift) / 255.
-            avg_shift = sum(offsets) / len(offsets)
-            ei_multiplier = max(0.25, 1.0 / (1.0 + avg_shift / 255.0))
-            time_multiplier = None
-        elif shouldered:
-            verdict = "shouldered"
-            time_multiplier = target_range / working_range if working_range > 0 else None
-            ei_multiplier = None
-        else:
-            verdict = "lut_fixable"
-            time_multiplier = None
-            ei_multiplier = None
+        verdict = "lut_fixable"
+        time_multiplier = None
 
     return {
         "b_plus_f": b_plus_f,
@@ -181,7 +172,6 @@ def diagnose(measurements, target_range=PAPER_GRADE_RANGE[2]):
         "shortfall": shortfall,
         "max_step_error": max_step_err,
         "time_multiplier": time_multiplier,
-        "ei_multiplier": ei_multiplier,
         "speed_point_pixel": speed_pixel,
         "top_slope": top_slope,
         "mid_slope": mid_slope,
@@ -191,13 +181,16 @@ def diagnose(measurements, target_range=PAPER_GRADE_RANGE[2]):
 def _target_pairs(px_values, b_plus_f, target_range):
     """Yield (pixel, target_density) over the measured pixel set.
 
-    `target_range` is the paper's working range (speed-point to
-    highlight); total density swing from pixel 0 to 255 is
-    target_range + SPEED_POINT_OFFSET so the speed point lands near
-    pixel = 255 * 0.10 / (target_range + 0.10)."""
-    total = target_range + SPEED_POINT_OFFSET
+    Two-region target: pixels 0..ZONE_I_PIXEL form the toe (densities
+    from b+f up to the speed point); pixels ZONE_I_PIXEL..255 are the
+    working range, linear in density to the highlight."""
+    sp_density = b_plus_f + SPEED_POINT_OFFSET
     for px in px_values:
-        yield px, b_plus_f + (px / 255.0) * total
+        if px <= ZONE_I_PIXEL:
+            yield px, b_plus_f + (px / ZONE_I_PIXEL) * SPEED_POINT_OFFSET
+        else:
+            t = (px - ZONE_I_PIXEL) / (255 - ZONE_I_PIXEL)
+            yield px, sp_density + t * target_range
 
 
 def _inverse_at(densities, pixels, target_d):
@@ -286,35 +279,66 @@ def correct_lut(old_lut_display, measurements,
     # Recover the film response curve.  At each wedge measurement X_i,
     # the drive level was OLD_LUT[X_i] and the resulting density was
     # raw_dens[i], giving 31 (drive, density) samples of the film's
-    # response function f(drive) -> density.
+    # response f(drive) -> density.  Smooth the density readings with
+    # a 3-point moving average before forcing monotonicity, so a single
+    # noisy reading doesn't bias the fit.
     drives = np.array([_sample_old_lut(old_lut_display, p) for p in px])
-    dens = np.array(_running_max(raw_dens))
+    smoothed = _moving_average(raw_dens, window=3)
+    dens = np.array(_running_max(smoothed))
 
-    # Degree-4 polynomial fit in log(drive+1) space.  Physics guarantees
-    # the response is smooth here -- piecewise interpolation would have
-    # tracked measurement noise as visible kinks.  Over-determined least
-    # squares (31 samples, 5 parameters) absorbs noise instead.  Degree
-    # 4 fits the H&D shape (toe, straight, shoulder) noticeably better
-    # than degree 3 (~30% lower RMS residual on real-world wedge data).
+    # Degree-3 polynomial fit in log(drive+1) space.  Physics guarantees
+    # the response is smooth -- piecewise interpolation would track
+    # densitometer noise as visible LUT kinks.  Degree 3 is plenty for
+    # the H&D shape (toe / straight / shoulder) and unlike degree 4 it
+    # is reliably monotone within the working range.
     L = np.log(drives + 1.0)
-    coeffs = np.polyfit(L, dens, deg=4)
+    coeffs = np.polyfit(L, dens, deg=3)
     fit = np.poly1d(coeffs)
 
     b_plus_f = float(dens.min())
-    total_range = target_range + SPEED_POINT_OFFSET
+    sp_density = b_plus_f + SPEED_POINT_OFFSET
+    highlight_density = sp_density + target_range
     L_min, L_max = float(L.min()), float(L.max())
 
+    # Two-region LUT:
+    #
+    # 1. Pixels 0..ZONE_I_PIXEL: smooth toe ramp from drive 0 to the
+    #    drive that produces the speed point.  These pixels land at or
+    #    below b+f + 0.10 -- on grade-2 paper they all print as Zone 0
+    #    (paper-black), so the exact drive shape here is cosmetic.  A
+    #    linear ramp gives the LUT a clean visual rise instead of a
+    #    cluster of zeros, but doesn't change what the print sees.
+    #
+    # 2. Pixels ZONE_I_PIXEL..255: working range.  Target density is
+    #    linear in pixel value from b+f + 0.10 (Zone I, paper-visible
+    #    detail) to b+f + 0.10 + target_range (Zone IX, paper-white).
+    #    Invert the polynomial fit at each target.
+    log_drive_speed = _invert_poly(fit, sp_density, L_min, L_max)
+    drive_speed = max(0.0, math.exp(log_drive_speed) - 1.0)
+
     new_lut = [0] * 256
-    for x in range(256):
-        target_d = b_plus_f + (x / 255.0) * total_range
-        # Find L such that fit(L) == target_d via bisection on the
-        # monotone fit.  Cubic-in-log-drive is monotone within our
-        # working range; clamp targets that fall outside.
+    for x in range(ZONE_I_PIXEL + 1):
+        new_lut[x] = round((x / ZONE_I_PIXEL) * drive_speed)
+    for x in range(ZONE_I_PIXEL + 1, 256):
+        t = (x - ZONE_I_PIXEL) / (255 - ZONE_I_PIXEL)
+        target_d = sp_density + t * target_range
         log_drive = _invert_poly(fit, target_d, L_min, L_max)
         drive = math.exp(log_drive) - 1.0
         new_lut[x] = max(0, round(drive))
 
     return _enforce_monotonic(new_lut)
+
+
+def _moving_average(values, window=3):
+    """Symmetric moving-average smoother (shrinking window at endpoints)."""
+    n = len(values)
+    half = window // 2
+    out = []
+    for i in range(n):
+        lo = max(0, i - half)
+        hi = min(n, i + half + 1)
+        out.append(sum(values[lo:hi]) / (hi - lo))
+    return out
 
 
 def _sample_old_lut(old_lut, pixel_index):

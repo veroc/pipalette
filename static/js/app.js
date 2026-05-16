@@ -1041,7 +1041,6 @@
         ["Speed point", diag.speed_point_pixel != null ? "px " + diag.speed_point_pixel.toFixed(1) : "—"],
       ];
       if (diag.time_multiplier != null) rows.push(["Dev time ×", diag.time_multiplier.toFixed(2)]);
-      if (diag.ei_multiplier != null)   rows.push(["EI ×",        diag.ei_multiplier.toFixed(2)]);
       var rowsHtml = rows.map(function (r) {
         return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>";
       }).join("");
