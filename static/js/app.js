@@ -810,7 +810,7 @@
       applyUpdate(target.dataset.target);
     } else if (action === "cal-create-roll") {
       ev.preventDefault();
-      calCreateRoll(target.dataset.profileId);
+      calCreateRoll(target.dataset.profileId, target);
     } else if (action === "cal-start-exposure") {
       ev.preventDefault();
       var pStart = target.closest("[data-calibration-panel]");
@@ -840,7 +840,14 @@
 
   // -------- calibration (v2: dual-resolution, FLM-page driven) -------
 
-  async function calCreateRoll(profileId) {
+  async function calCreateRoll(profileId, btn) {
+    var originalText = null;
+    if (btn) {
+      btn.disabled = true;
+      originalText = btn.textContent;
+      btn.classList.add("is-busy");
+      btn.textContent = "Preparing roll…";
+    }
     try {
       await jsonFetch(
         "/api/film-tables/" + encodeURIComponent(profileId) + "/calibrate",
@@ -850,6 +857,11 @@
       location.reload();
     } catch (err) {
       toast("Couldn't start calibration: " + err.message, "err");
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove("is-busy");
+        if (originalText) btn.textContent = originalText;
+      }
     }
   }
 

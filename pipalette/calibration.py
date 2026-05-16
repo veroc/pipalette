@@ -420,25 +420,37 @@ def create_calibration_roll(rolls_store, film_tables, profile_id):
         bw_filter=bw_filter, calibration_for=profile_id,
     )
 
-    # 1. Identification frame (dynamic).
+    # 1. Identification frame (dynamic).  Generated at 4K and attached
+    #    via the same prerendered path that the wedge frames use, so we
+    #    also skip the renderer + thumb generation for it.
     id_bytes = _render_identification_image(profile)
-    id_frame = rolls_store.add_image(
-        roll["id"], id_bytes, "00_identification.png",
+    _attach_prerendered_frame(
+        rolls_store, roll["id"], id_bytes,
+        resolution="4k",
+        original_name="00_identification.png",
+        src_dimensions=(4096, 2731),
     )
-    # The ID frame defaults to 4K (renderer chose based on source size,
-    # which is fine for our purposes -- a tiny dynamic PNG).
 
-    # 2 + 3. 4K and 8K wedge frames (static assets).
+    # 2 + 3. 4K and 8K wedge frames (static assets).  Cache dimensions
+    #    once per resolution -- they don't vary across the 16 frames.
     static_root = _static_wedge_root()
+    cached_dims = {}
     for resolution in ("4k", "8k"):
         for frame_n in range(1, _FRAMES_PER_RESOLUTION + 1):
             png_path = static_root / f"35mm-3x2-{resolution}" / f"frame_{frame_n:02d}.png"
             if not png_path.is_file():
                 raise FileNotFoundError(f"missing wedge asset: {png_path}")
+            raw = png_path.read_bytes()
+            if resolution not in cached_dims:
+                import io
+                from PIL import Image
+                with Image.open(io.BytesIO(raw)) as probe:
+                    cached_dims[resolution] = probe.size
             _attach_prerendered_frame(
-                rolls_store, roll["id"], png_path,
+                rolls_store, roll["id"], raw,
                 resolution=resolution,
                 original_name=f"{resolution}_frame_{frame_n:02d}.png",
+                src_dimensions=cached_dims[resolution],
             )
 
     return rolls_store.get(roll["id"])
@@ -451,48 +463,47 @@ def _static_wedge_root():
     return Path(__file__).resolve().parent.parent / "static" / "calibration" / "wedge"
 
 
-def _attach_prerendered_frame(rolls_store, roll_id, png_path,
-                              resolution, original_name):
-    """Add a frame using a pre-baked output PNG -- skips the per-frame
-    renderer entirely.
+def _attach_prerendered_frame(rolls_store, roll_id, raw_png_bytes,
+                              resolution, original_name,
+                              src_dimensions=None):
+    """Add a frame using pre-baked output PNG bytes -- skips the
+    per-frame renderer AND skips thumbnail generation.
+
+    Calibration rolls are hidden from /rolls and the FLM-page UI doesn't
+    show per-frame previews, so the thumbnail step (which on the Pi runs
+    32x at PIL.Image.thumbnail on a 4K/8K PNG and takes most of the roll-
+    creation wall-clock) is pure waste here.
 
     Writes:
-        outputs/<frame_id>.png   = the pre-rendered wedge image
-        thumbs/<frame_id>.jpg    = a 240px thumbnail
-        images/<image_id>.png    = a tiny source (the wedge image itself)
-    and appends the frame entry to the roll index with status=pending.
+        outputs/<frame_id>.png   = the pre-rendered output image
+        images/<image_id>.png    = the same bytes (kept for schema parity)
+    and appends a frame entry with status=pending.  No thumb file.
     """
     import hashlib
     import io
-    import time
     import uuid
     from PIL import Image
 
-    raw = png_path.read_bytes()
+    raw = raw_png_bytes
     image_id = hashlib.sha1(raw).hexdigest()[:16] + "_" + uuid.uuid4().hex[:6]
     frame_id = uuid.uuid4().hex[:12]
 
     roll_dir = rolls_store.roll_dir(roll_id)
     src_path = roll_dir / "images" / (image_id + ".png")
     out_path = roll_dir / "outputs" / (frame_id + ".png")
-    thumb_path = roll_dir / "thumbs" / (frame_id + ".jpg")
 
     src_path.write_bytes(raw)
-    out_path.write_bytes(raw)  # pre-rendered: source == output
+    out_path.write_bytes(raw)
 
-    # Cheap 240px thumbnail of the pre-rendered output.
-    with Image.open(io.BytesIO(raw)) as img:
-        img.thumbnail((240, 240))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        img.save(thumb_path, "JPEG", quality=80)
+    if src_dimensions is None:
+        with Image.open(io.BytesIO(raw)) as probe:
+            src_dimensions = probe.size
 
     with rolls_store._lock:
         roll = rolls_store._find(roll_id)
         if roll is None:
             raise KeyError(roll_id)
-        with Image.open(io.BytesIO(raw)) as probe:
-            src_w, src_h = probe.size
+        src_w, src_h = src_dimensions
         roll["frames"].append({
             "id": frame_id,
             "image_id": image_id,
