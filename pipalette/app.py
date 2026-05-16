@@ -6,6 +6,8 @@ import shutil
 import time
 from pathlib import Path
 
+import pp8k
+
 from flask import (
     Flask,
     Response,
@@ -18,6 +20,7 @@ from flask import (
     url_for,
 )
 
+from . import calibration
 from . import updates
 from . import wizard_baselines
 from .config import Config
@@ -83,6 +86,23 @@ def _lut_set_payload(lut_set):
         "scale_g": lut_set.scale_g,
         "scale_b": lut_set.scale_b,
     }
+
+
+def _classify_calibration_roll(roll):
+    """Map a calibration roll to a UI state machine state."""
+    if not roll:
+        return "none"
+    frames = roll.get("frames") or []
+    statuses = {f.get("status") for f in frames}
+    if statuses & {"exposing"}:
+        return "exposing"
+    if "pending" in statuses:
+        return "ready_to_expose"
+    # All frames exposed (done / skipped / failed).
+    measurements = roll.get("measurements") or []
+    if len(measurements) < 2:
+        return "awaiting_measurements"
+    return "measurements_complete"
 
 
 def _curve_payload(table):
@@ -190,6 +210,19 @@ def create_app(data_dir=None):
         if table is None:
             abort(404)
         curves = _curve_payload(table)
+
+        # Active calibration session, if any.  The roll itself stays
+        # hidden from /rolls; the UI on this page is the only entry
+        # point to its measurement form + progress display.
+        cal_roll = rolls.get_calibration_roll(profile_id)
+        cal_state = _classify_calibration_roll(cal_roll) if cal_roll else "none"
+        cal_steps_4k = None
+        cal_steps_8k = None
+        if cal_roll:
+            px = calibration.wedge_pixel_values()
+            cal_steps_4k = [{"index": i + 1, "pixel": p} for i, p in enumerate(px)]
+            cal_steps_8k = list(cal_steps_4k)
+
         return render_template(
             "film_table_detail.html",
             view="film-tables",
@@ -200,6 +233,10 @@ def create_app(data_dir=None):
             bw_filter_label=_bw_filter_label(table.bw_filter),
             uploaded_label=_format_timestamp(profile.get("uploaded_at")),
             size_label=_format_bytes(profile.get("size", 0)),
+            cal_roll=cal_roll,
+            cal_state=cal_state,
+            cal_steps_4k=cal_steps_4k,
+            cal_steps_8k=cal_steps_8k,
         )
 
     @app.route("/device")
@@ -343,6 +380,156 @@ def create_app(data_dir=None):
     def api_film_tables_delete(profile_id):
         ok = film_tables.delete(profile_id)
         return ("", 204) if ok else ("", 404)
+
+    @app.route("/api/film-tables/<profile_id>/calibrate", methods=["POST"])
+    def api_film_tables_calibrate(profile_id):
+        """Create a calibration roll for the given film table.
+
+        Roll appears under /rolls and is populated with one ID frame
+        plus 31 flat-tone wedge frames. After exposure and development
+        the user enters densities via POST /api/calibration/<roll_id>.
+        """
+        try:
+            roll = calibration.create_calibration_roll(
+                rolls, film_tables, profile_id,
+            )
+        except KeyError:
+            return jsonify({"error": "film table not found"}), 404
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 410
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(roll), 201
+
+    @app.route("/api/calibration/<roll_id>/measurements", methods=["POST"])
+    def api_calibration_measurements(roll_id):
+        """Store the densitometer readings on a calibration roll and
+        return diagnostic verdicts for the 4K and 8K wedges separately.
+        Does NOT apply the new LUT -- that happens via /apply.
+
+        Expected payload:
+            {
+              "measurements_4k": [{"pixel": 0, "density": 0.20}, ...],
+              "measurements_8k": [{"pixel": 0, "density": 0.20}, ...]
+            }
+        Either list may be omitted (e.g., calibrating only 4K).
+        """
+        payload = request.get_json(silent=True) or {}
+        m4k = payload.get("measurements_4k") or []
+        m8k = payload.get("measurements_8k") or []
+        if not (m4k or m8k):
+            return jsonify({"error": "no measurements provided"}), 400
+        # Tag each measurement with its resolution before storing.
+        tagged = []
+        for m in m4k:
+            tagged.append({"resolution": "4k",
+                           "pixel": int(m["pixel"]),
+                           "density": float(m["density"])})
+        for m in m8k:
+            tagged.append({"resolution": "8k",
+                           "pixel": int(m["pixel"]),
+                           "density": float(m["density"])})
+        try:
+            roll = rolls.set_measurements(roll_id, tagged)
+        except KeyError:
+            return jsonify({"error": "roll not found"}), 404
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        result = {"roll": roll}
+        if len(m4k) >= 5:
+            pairs_4k = sorted(((int(m["pixel"]), float(m["density"])) for m in m4k),
+                              key=lambda t: t[0])
+            result["diagnostic_4k"] = calibration.diagnose(pairs_4k)
+        if len(m8k) >= 5:
+            pairs_8k = sorted(((int(m["pixel"]), float(m["density"])) for m in m8k),
+                              key=lambda t: t[0])
+            result["diagnostic_8k"] = calibration.diagnose(pairs_8k)
+        return jsonify(result)
+
+    @app.route("/api/calibration/<roll_id>/apply", methods=["POST"])
+    def api_calibration_apply(roll_id):
+        """Compute the corrected LUTs (Master A from 4K, Master B from 8K),
+        save them as a new versioned FLM."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            target_range = float(
+                payload.get("target_range", calibration.PAPER_GRADE_RANGE[2])
+            )
+        except (TypeError, ValueError):
+            return jsonify({"error": "target_range must be a float"}), 400
+
+        roll = rolls.get(roll_id)
+        if roll is None:
+            return jsonify({"error": "roll not found"}), 404
+        if "calibration_for" not in roll:
+            return jsonify({"error": "roll is not a calibration roll"}), 400
+        meas = roll.get("measurements") or []
+        if len(meas) < 5:
+            return jsonify({"error": "no measurements stored yet"}), 400
+
+        source_profile_id = roll["calibration_for"]
+        source = film_tables.read_table(source_profile_id)
+        if source is None:
+            return jsonify({"error": "source film table missing"}), 410
+
+        # Split measurements by resolution.
+        pairs_4k = sorted(((m["pixel"], m["density"]) for m in meas
+                           if m.get("resolution") == "4k"),
+                          key=lambda t: t[0])
+        pairs_8k = sorted(((m["pixel"], m["density"]) for m in meas
+                           if m.get("resolution") == "8k"),
+                          key=lambda t: t[0])
+
+        # Master A from 4K data; if 8K not provided, keep Master B in sync
+        # with the new Master A (×0.5 -- matches the wizard convention).
+        if len(pairs_4k) >= 5:
+            old_a = calibration.calibrated_master_a_display(source)
+            new_a = list(calibration.correct_lut(old_a, pairs_4k,
+                                                 target_range=target_range))
+        else:
+            new_a = list(calibration.calibrated_master_a_display(source))
+
+        if len(pairs_8k) >= 5:
+            old_b = calibration.calibrated_master_b_display(source)
+            new_b = list(calibration.correct_lut(old_b, pairs_8k,
+                                                 target_range=target_range))
+        else:
+            new_b = None  # will be derived from new_a via the wizard convention
+
+        existing_ids = {p["id"] for p in film_tables.profiles()}
+        new_internal = calibration.next_versioned_name(
+            source_profile_id, existing_ids,
+        )
+        new_table = calibration.build_calibrated_table(
+            source, new_a, new_internal_name=new_internal,
+            new_name=source.name, new_master_b_display=new_b,
+        )
+        raw = pp8k.serialize_flm(new_table)
+        ft_files = film_tables._files_dir
+        ft_files.mkdir(parents=True, exist_ok=True)
+        filename = new_internal + ".flm"
+        (ft_files / filename).write_bytes(raw)
+        new_profile = {
+            "id": new_internal,
+            "filename": filename,
+            "original_name": filename,
+            "name": new_table.name,
+            "camera_type": new_table.camera_type_name,
+            "is_bw": bool(new_table.is_bw),
+            "bw_filter": new_table.bw_filter,
+            "bw_filter_name": source.bw_filter_name,
+            "aspect_w": new_table.aspect_w,
+            "aspect_h": new_table.aspect_h,
+            "size": len(raw),
+            "uploaded_at": int(time.time()),
+            "calibrated_from": source_profile_id,
+            "calibration_roll": roll_id,
+        }
+        with film_tables._lock:
+            film_tables._index["profiles"].append(new_profile)
+            film_tables._save()
+        return jsonify(new_profile), 201
 
     # ---- rolls -----------------------------------------------------------
 

@@ -15,6 +15,13 @@
       </p>
     </div>
     <div class="panel-actions">
+      {% if profile.is_bw and profile.bw_filter in (1, 2, 3) and cal_state == 'none' %}
+        <button type="button" class="btn btn-primary"
+                data-action="cal-create-roll"
+                data-profile-id="{{ profile.id }}">
+          Calibrate
+        </button>
+      {% endif %}
       <button type="button" class="btn btn-ghost btn-danger" data-action="delete-profile" data-profile-id="{{ profile.id }}">Delete</button>
     </div>
   </header>
@@ -96,6 +103,87 @@
     </div>
   </div>
 </section>
+
+{% if cal_state != 'none' %}
+<section class="panel" data-calibration-panel
+         data-roll-id="{{ cal_roll.id }}"
+         data-profile-id="{{ profile.id }}"
+         data-cal-state="{{ cal_state }}">
+  <header class="panel-head">
+    <div>
+      <h2 class="panel-title">Calibration in progress</h2>
+      <p class="panel-sub" data-cal-sub>
+        {% if cal_state == 'ready_to_expose' %}
+          Roll prepared, awaiting exposure on the device.
+        {% elif cal_state == 'exposing' %}
+          Exposing calibration roll — keep the device powered until done.
+        {% elif cal_state == 'awaiting_measurements' %}
+          Exposure finished. Develop the film, then enter densitometer readings below.
+        {% elif cal_state == 'measurements_complete' %}
+          Measurements stored. Analyse and apply to save a new calibrated FLM.
+        {% endif %}
+      </p>
+    </div>
+    <div class="panel-actions">
+      {% if cal_state == 'ready_to_expose' %}
+        <button type="button" class="btn btn-primary" data-action="cal-start-exposure">Expose calibration roll</button>
+      {% elif cal_state == 'exposing' %}
+        <button type="button" class="btn btn-ghost" data-action="cal-open-progress">View progress</button>
+      {% elif cal_state in ('awaiting_measurements', 'measurements_complete') %}
+        <button type="button" class="btn btn-ghost btn-sm" data-action="cal-prefill">Prefill perfect-curve example</button>
+        <button type="button" class="btn btn-primary" data-action="cal-analyze">Analyse</button>
+      {% endif %}
+      <button type="button" class="btn btn-ghost btn-danger btn-sm" data-action="cal-cancel">Cancel calibration</button>
+    </div>
+  </header>
+
+  {% if cal_state in ('awaiting_measurements', 'measurements_complete') %}
+    {% set m4k = {} %}
+    {% set m8k = {} %}
+    {% if cal_roll and cal_roll.measurements %}
+      {% for m in cal_roll.measurements %}
+        {% if m.resolution == '4k' %}{% set _ = m4k.update({m.pixel: m.density}) %}
+        {% elif m.resolution == '8k' %}{% set _ = m8k.update({m.pixel: m.density}) %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+    <div class="cal-blocks">
+      <div class="cal-block">
+        <h3 class="cal-block-title">4K wedge <span class="cal-block-tag">Master A</span></h3>
+        <div class="cal-grid" data-cal-grid="4k">
+          {% for step in cal_steps_4k %}
+            <label class="cal-row">
+              <span class="cal-frame">S{{ '%02d' | format(step.index) }}</span>
+              <span class="cal-pixel">p{{ '%03d' | format(step.pixel) }}</span>
+              <input type="number" inputmode="decimal" step="0.01" min="0" max="4"
+                     data-cal-resolution="4k"
+                     data-cal-pixel="{{ step.pixel }}"
+                     {% if m4k.get(step.pixel) is not none %}value="{{ m4k.get(step.pixel) }}"{% endif %}>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="cal-block">
+        <h3 class="cal-block-title">8K wedge <span class="cal-block-tag">Master B</span></h3>
+        <div class="cal-grid" data-cal-grid="8k">
+          {% for step in cal_steps_8k %}
+            <label class="cal-row">
+              <span class="cal-frame">S{{ '%02d' | format(step.index) }}</span>
+              <span class="cal-pixel">p{{ '%03d' | format(step.pixel) }}</span>
+              <input type="number" inputmode="decimal" step="0.01" min="0" max="4"
+                     data-cal-resolution="8k"
+                     data-cal-pixel="{{ step.pixel }}"
+                     {% if m8k.get(step.pixel) is not none %}value="{{ m8k.get(step.pixel) }}"{% endif %}>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <div class="cal-result" data-cal-result hidden></div>
+</section>
+{% endif %}
 
 <script id="curve-data" type="application/json">{{ curves | safe }}</script>
 {% endblock %}

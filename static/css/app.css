@@ -1117,3 +1117,148 @@ select.input { height: 32px; padding-right: 24px; }
   .wizard-form { grid-template-columns: 1fr; }
   .wizard-preview .curve-canvas { height: 140px; }
 }
+
+/* ----- calibration measurement entry ------------------------------- */
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px 16px;
+  padding-top: 8px;
+}
+.cal-row {
+  display: grid;
+  grid-template-columns: 64px 48px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.cal-frame { color: var(--text-1); }
+.cal-pixel { color: var(--text-3); font-family: var(--font-mono); font-size: 11px; }
+.cal-row input {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text-0);
+  outline: none;
+  font-family: var(--font-mono);
+}
+.cal-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(240, 164, 41, 0.15);
+}
+
+.cal-result {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cal-verdict {
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  border-left: 3px solid var(--accent);
+}
+.cal-verdict strong { color: var(--text-0); margin-right: 6px; }
+.cal-verdict-ok                 { border-left-color: var(--ok); }
+.cal-verdict-lut_fixable        { border-left-color: var(--accent); }
+.cal-verdict-shouldered         { border-left-color: var(--warn); }
+.cal-verdict-global_underexposure { border-left-color: var(--warn); }
+.cal-blurb { font-size: 12px; color: var(--text-1); margin: 0; line-height: 1.5; }
+.cal-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  margin: 0;
+}
+.cal-stats dt { color: var(--text-2); }
+.cal-stats dd { color: var(--text-0); margin: 0; text-align: right; }
+.cal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.cal-hint { font-size: 11px; color: var(--text-2); margin: 0; }
+.cal-err { color: var(--err); font-size: 12px; }
+
+/* ----- calibration v2: dual-resolution + progress modal ----------- */
+
+.cal-blocks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.cal-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 12px;
+}
+.cal-block-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-0);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cal-block-tag {
+  font-size: 11px;
+  color: var(--text-3);
+  font-weight: 400;
+}
+.cal-block .cal-grid {
+  grid-template-columns: 1fr;
+  gap: 4px 8px;
+}
+.cal-block .cal-row {
+  grid-template-columns: 40px 48px 1fr;
+}
+
+.cal-block-result {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.cal-block-result-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .cal-blocks { grid-template-columns: 1fr; }
+}
+
+.cal-progress-modal {
+  width: min(440px, calc(100vw - 32px));
+}
+.cal-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cal-progress-bar {
+  height: 12px;
+  background: var(--bg-3);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cal-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+.cal-progress-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-1);
+}

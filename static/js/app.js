@@ -808,8 +808,275 @@
     } else if (action === "update-apply") {
       ev.preventDefault();
       applyUpdate(target.dataset.target);
+    } else if (action === "cal-create-roll") {
+      ev.preventDefault();
+      calCreateRoll(target.dataset.profileId);
+    } else if (action === "cal-start-exposure") {
+      ev.preventDefault();
+      var pStart = target.closest("[data-calibration-panel]");
+      if (pStart) calStartExposure(pStart);
+    } else if (action === "cal-open-progress") {
+      ev.preventDefault();
+      var pProg = target.closest("[data-calibration-panel]");
+      if (pProg) calOpenProgress(pProg);
+    } else if (action === "cal-analyze") {
+      ev.preventDefault();
+      var pAna = target.closest("[data-calibration-panel]");
+      if (pAna) calAnalyze(pAna);
+    } else if (action === "cal-prefill") {
+      ev.preventDefault();
+      var pPre = target.closest("[data-calibration-panel]");
+      if (pPre) calPrefill(pPre);
+    } else if (action === "cal-apply") {
+      ev.preventDefault();
+      var pApp = target.closest("[data-calibration-panel]");
+      if (pApp) calApply(pApp);
+    } else if (action === "cal-cancel") {
+      ev.preventDefault();
+      var pCan = target.closest("[data-calibration-panel]");
+      if (pCan) calCancel(pCan);
     }
   });
+
+  // -------- calibration (v2: dual-resolution, FLM-page driven) -------
+
+  async function calCreateRoll(profileId) {
+    try {
+      await jsonFetch(
+        "/api/film-tables/" + encodeURIComponent(profileId) + "/calibrate",
+        { method: "POST" },
+      );
+      toast("Calibration roll prepared", "ok");
+      location.reload();
+    } catch (err) {
+      toast("Couldn't start calibration: " + err.message, "err");
+    }
+  }
+
+  async function calStartExposure(panel) {
+    var rollId = panel.dataset.rollId;
+    try {
+      await jsonFetch("/api/rolls/" + rollId + "/start", { method: "POST" });
+      calOpenProgress(panel);
+    } catch (err) {
+      toast("Couldn't start exposure: " + err.message, "err");
+    }
+  }
+
+  function calOpenProgress(panel) {
+    // Minimal progress modal that subscribes to the runner SSE stream
+    // and updates per-frame status.  Reuses the existing event source.
+    var rollId = panel.dataset.rollId;
+    var backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML =
+      '<div class="modal cal-progress-modal">' +
+        '<div class="modal-head">' +
+          '<h3 class="modal-title">Exposing calibration roll</h3>' +
+          '<p class="modal-sub">Keep the device powered until all 33 frames are exposed.</p>' +
+        '</div>' +
+        '<div class="modal-body">' +
+          '<div class="cal-progress" data-cal-progress>' +
+            '<div class="cal-progress-bar"><div class="cal-progress-fill" style="width:0%"></div></div>' +
+            '<div class="cal-progress-text" data-cal-progress-text>Waiting…</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-foot">' +
+          '<button type="button" class="btn btn-ghost" data-cal-progress-close>Close (exposure continues)</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(backdrop);
+
+    var fill = backdrop.querySelector(".cal-progress-fill");
+    var textEl = backdrop.querySelector("[data-cal-progress-text]");
+
+    function update(done, total, msg) {
+      var pct = total > 0 ? Math.round(done / total * 100) : 0;
+      fill.style.width = pct + "%";
+      textEl.textContent = (msg || ("Frame " + done + " / " + total)) + "  (" + pct + "%)";
+    }
+
+    // Pull initial state.
+    fetch("/api/rolls/" + rollId).then(function (r) { return r.json(); }).catch(function () { return null; });
+
+    // Subscribe to SSE.  Re-use the global runner stream; filter on roll_id.
+    var es = new EventSource("/api/runner/events");
+    var doneFrames = 0;
+    var totalFrames = 33;
+    es.addEventListener("state", function (e) {
+      try {
+        var s = JSON.parse(e.data);
+        if (s.roll_id === rollId) {
+          totalFrames = s.total || 33;
+          doneFrames = s.completed || 0;
+          update(doneFrames, totalFrames);
+        }
+      } catch (_) {}
+    });
+    es.addEventListener("frame_status", function (e) {
+      try {
+        var s = JSON.parse(e.data);
+        if (s.roll_id !== rollId) return;
+        if (s.status === "done" || s.status === "skipped" || s.status === "failed") {
+          doneFrames++;
+          update(doneFrames, totalFrames);
+          if (doneFrames >= totalFrames) {
+            es.close();
+            setTimeout(function () { location.reload(); }, 500);
+          }
+        } else if (s.status === "exposing") {
+          update(doneFrames, totalFrames, "Exposing frame " + (doneFrames + 1) + " / " + totalFrames);
+        }
+      } catch (_) {}
+    });
+
+    function close() {
+      es.close();
+      backdrop.remove();
+    }
+    backdrop.querySelector("[data-cal-progress-close]").addEventListener("click", close);
+    backdrop.addEventListener("click", function (ev) {
+      if (ev.target === backdrop) close();
+    });
+  }
+
+  function calGatherMeasurements(panel) {
+    var inputs = panel.querySelectorAll("input[data-cal-resolution]");
+    var by_res = { "4k": [], "8k": [] };
+    var missing = 0;
+    inputs.forEach(function (inp) {
+      var v = inp.value.trim();
+      if (v === "") { missing++; return; }
+      var d = parseFloat(v);
+      if (isNaN(d)) { missing++; return; }
+      by_res[inp.dataset.calResolution].push({
+        pixel: parseInt(inp.dataset.calPixel, 10),
+        density: d,
+      });
+    });
+    return { by_res: by_res, missing: missing, total: inputs.length };
+  }
+
+  function calPrefill(panel) {
+    // b+f = 0.20; total swing = 1.15.  Same target for 4K and 8K --
+    // calibration should make them produce the same density at the same
+    // input pixel.
+    panel.querySelectorAll("input[data-cal-resolution]").forEach(function (inp) {
+      var px = parseInt(inp.dataset.calPixel, 10);
+      inp.value = (0.20 + (px / 255) * 1.15).toFixed(2);
+    });
+  }
+
+  async function calAnalyze(panel) {
+    var rollId = panel.dataset.rollId;
+    var g = calGatherMeasurements(panel);
+    if (g.missing > 0) {
+      toast("Fill in all " + g.total + " densities", "warn");
+      return;
+    }
+    var resultEl = panel.querySelector("[data-cal-result]");
+    resultEl.hidden = false;
+    resultEl.innerHTML = "<p>Analysing…</p>";
+    try {
+      var data = await jsonFetch(
+        "/api/calibration/" + rollId + "/measurements",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            measurements_4k: g.by_res["4k"],
+            measurements_8k: g.by_res["8k"],
+          }),
+        },
+      );
+      renderCalDiagnostic(resultEl, data);
+    } catch (err) {
+      resultEl.innerHTML = '<p class="cal-err">' + err.message + '</p>';
+    }
+  }
+
+  function renderCalDiagnostic(el, data) {
+    function block(title, diag) {
+      if (!diag) return "";
+      var rows = [
+        ["b+f", diag.b_plus_f.toFixed(3)],
+        ["D_max", diag.d_max.toFixed(3)],
+        ["Working range", diag.working_range.toFixed(3)],
+        ["Target", diag.target_range.toFixed(3)],
+        ["Shortfall", diag.shortfall.toFixed(3)],
+        ["Max step error", diag.max_step_error.toFixed(3)],
+        ["Speed point", diag.speed_point_pixel != null ? "px " + diag.speed_point_pixel.toFixed(1) : "—"],
+      ];
+      if (diag.time_multiplier != null) rows.push(["Dev time ×", diag.time_multiplier.toFixed(2)]);
+      if (diag.ei_multiplier != null)   rows.push(["EI ×",        diag.ei_multiplier.toFixed(2)]);
+      var rowsHtml = rows.map(function (r) {
+        return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>";
+      }).join("");
+      return (
+        '<div class="cal-block-result">' +
+          '<h4 class="cal-block-result-title">' + title +
+            ' <span class="cal-verdict cal-verdict-' + diag.verdict + '">' +
+              diag.verdict.replace(/_/g, " ") +
+            '</span>' +
+          '</h4>' +
+          '<dl class="cal-stats">' + rowsHtml + '</dl>' +
+        '</div>'
+      );
+    }
+    var any = data.diagnostic_4k || data.diagnostic_8k;
+    var html =
+      '<div class="cal-blocks">' +
+        block("4K (Master A)", data.diagnostic_4k) +
+        block("8K (Master B)", data.diagnostic_8k) +
+      '</div>';
+    var canApply = any && (
+      [data.diagnostic_4k, data.diagnostic_8k].every(function (d) {
+        return !d || d.verdict === "ok" || d.verdict === "lut_fixable" ||
+               d.verdict === "global_underexposure";
+      })
+    );
+    html += canApply
+      ? '<div class="cal-actions"><button type="button" class="btn btn-primary" data-action="cal-apply">Apply &amp; save new FLM</button></div>'
+      : '<p class="cal-hint">Resolve the chemistry issue above (longer dev / EI bump) and re-measure before applying.</p>';
+    el.innerHTML = html;
+  }
+
+  async function calApply(panel) {
+    var rollId = panel.dataset.rollId;
+    try {
+      var data = await jsonFetch(
+        "/api/calibration/" + rollId + "/apply",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+      );
+      toast("New FLM saved: " + data.id, "ok");
+      location.href = "/film-tables/" + encodeURIComponent(data.id);
+    } catch (err) {
+      toast("Apply failed: " + err.message, "err");
+    }
+  }
+
+  async function calCancel(panel) {
+    var rollId = panel.dataset.rollId;
+    var ok = await confirmDialog({
+      title: "Cancel calibration?",
+      message: "The calibration roll and any measurements you've entered will be discarded.",
+      confirmLabel: "Discard calibration",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      var res = await fetch("/api/rolls/" + rollId, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) throw new Error(res.statusText);
+      toast("Calibration cancelled", "ok");
+      location.reload();
+    } catch (err) {
+      toast("Couldn't cancel: " + err.message, "err");
+    }
+  }
 
   // -------- reset frame ----------------------------------------------
 

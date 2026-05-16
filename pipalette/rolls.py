@@ -100,9 +100,25 @@ class RollStore:
 
     # ---- queries --------------------------------------------------------
 
-    def list(self):
+    def list(self, include_calibration=False):
+        """Return summaries for user-facing rolls.
+
+        Calibration rolls (those with `calibration_for` set) are internal
+        artefacts of the calibration workflow and are hidden from the
+        normal rolls listing by default."""
         with self._lock:
-            return [self._summary(r) for r in self._index["rolls"]]
+            return [
+                self._summary(r) for r in self._index["rolls"]
+                if include_calibration or not r.get("calibration_for")
+            ]
+
+    def get_calibration_roll(self, profile_id):
+        """Return the active calibration roll for a film-table profile, or None."""
+        with self._lock:
+            for r in self._index["rolls"]:
+                if r.get("calibration_for") == profile_id:
+                    return _deep_copy_json(r)
+            return None
 
     def get(self, roll_id):
         with self._lock:
@@ -147,7 +163,8 @@ class RollStore:
 
     # ---- mutations: rolls ----------------------------------------------
 
-    def create(self, name, profile, flm_bytes, bw_filter=None):
+    def create(self, name, profile, flm_bytes, bw_filter=None,
+               calibration_for=None):
         """Create a roll from a film-table profile + its FLM bytes.
 
         `profile` is the dict returned by FilmTables — we snapshot its
@@ -157,6 +174,10 @@ class RollStore:
         is ignored.  Exposure runs via `pp8k.Device.expose(flm=...)`
         which uses pp8k's internal scratch slot, so the roll doesn't
         carry a device slot at all.
+
+        If `calibration_for` is set to a film-table profile id, the
+        roll is marked as a calibration session for that film table --
+        the UI uses this to show the measurement-entry workflow.
         """
         if not name or not name.strip():
             raise ValueError("name is required")
@@ -193,6 +214,9 @@ class RollStore:
             "recalibrate_next": True,
             "frames": [],
         }
+        if calibration_for:
+            roll["calibration_for"] = calibration_for
+            roll["measurements"] = []  # filled when the user enters densities
         with self._lock:
             self._index["rolls"].append(roll)
             self._save()
@@ -371,6 +395,30 @@ class RollStore:
                 frame["exposed_at"] = int(time.time())
             self._save()
             return _deep_copy_json(frame)
+
+    def set_measurements(self, roll_id, measurements):
+        """Store the densitometer measurements for a calibration roll.
+
+        `measurements` is a list of dicts {"pixel": int, "density": float}
+        or a list of (pixel, density) tuples.  Stored as dicts.
+        """
+        normalized = []
+        for m in measurements:
+            if isinstance(m, dict):
+                normalized.append({"pixel": int(m["pixel"]),
+                                   "density": float(m["density"])})
+            else:
+                px, d = m
+                normalized.append({"pixel": int(px), "density": float(d)})
+        with self._lock:
+            roll = self._find(roll_id)
+            if roll is None:
+                raise KeyError(roll_id)
+            if "calibration_for" not in roll:
+                raise ValueError("roll is not a calibration roll")
+            roll["measurements"] = normalized
+            self._save()
+            return _deep_copy_json(roll)
 
     def set_roll_field(self, roll_id, key, value):
         """Update a single mutable roll-wide field atomically.
