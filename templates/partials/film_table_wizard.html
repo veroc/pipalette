@@ -1,0 +1,94 @@
+<div class="modal-backdrop wizard-backdrop" id="wizard-backdrop" hidden>
+  <div class="modal wizard" role="dialog" aria-labelledby="wizard-title">
+    <div class="modal-head">
+      <h3 class="modal-title" id="wizard-title">Create film table</h3>
+      <p class="modal-sub">Generates a baseline curve you can refine in a future calibration pass.</p>
+    </div>
+
+    <div class="modal-body wizard-body">
+      <form id="wizard-form" class="wizard-form" autocomplete="off">
+        <div class="wizard-grid">
+          <label class="field">
+            <span class="field-label">Name</span>
+            <input type="text" name="name" maxlength="24" required placeholder="Plus-X Pan 125">
+            <span class="field-hint">Display name, max 24 chars.</span>
+          </label>
+
+          <label class="field">
+            <span class="field-label">Internal name</span>
+            <input type="text" name="internal_name" maxlength="8" required placeholder="PXP125" pattern="[A-Za-z0-9_\-]{1,8}">
+            <span class="field-hint">Unique 1-8 ASCII chars; letters, digits, <code>-</code>, <code>_</code>.</span>
+            <span class="field-error" data-field-error="internal_name" hidden></span>
+          </label>
+
+          <fieldset class="field field-radio">
+            <legend class="field-label">Type</legend>
+            <div class="seg">
+              <label class="seg-item"><input type="radio" name="type" value="bw" checked><span>B&amp;W</span></label>
+              <label class="seg-item seg-item-disabled" title="Color FLMs coming in v2"><input type="radio" name="type" value="color" disabled><span>Color</span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="field field-radio">
+            <legend class="field-label">Filter</legend>
+            <div class="seg" data-filter-seg>
+              <label class="seg-item"><input type="radio" name="bw_filter" value="1"><span>Green</span></label>
+              <label class="seg-item"><input type="radio" name="bw_filter" value="2"><span>Red</span></label>
+              <label class="seg-item"><input type="radio" name="bw_filter" value="3" checked><span>Blue</span></label>
+            </div>
+            <span class="field-hint">CRT phosphor used for exposure. Blue suits most modern panchromatic stock (7/12 originals).</span>
+          </fieldset>
+
+          <fieldset class="field field-radio">
+            <legend class="field-label">Format</legend>
+            <div class="seg">
+              <label class="seg-item"><input type="radio" name="camera_type" value="1" checked><span>35mm</span></label>
+              <label class="seg-item seg-item-disabled" title="6x7 coming in v2"><input type="radio" name="camera_type" value="4" disabled><span>6x7</span></label>
+              <label class="seg-item seg-item-disabled" title="6x8 coming in v2"><input type="radio" name="camera_type" value="5" disabled><span>6x8</span></label>
+              <label class="seg-item seg-item-disabled" title="4x5 coming in v2"><input type="radio" name="camera_type" value="3" disabled><span>4x5</span></label>
+            </div>
+          </fieldset>
+
+          <fieldset class="field field-radio">
+            <legend class="field-label">Film speed (ISO)</legend>
+            <div class="seg" data-iso-seg>
+              {% for iso in [25, 50, 100, 200, 400, 800] %}
+              <label class="seg-item"><input type="radio" name="iso" value="{{ iso }}"{% if iso == 100 %} checked{% endif %}><span>{{ iso }}</span></label>
+              {% endfor %}
+            </div>
+          </fieldset>
+        </div>
+
+        <div class="wizard-preview">
+          <div class="curve-panel" data-wizard-curve="4k">
+            <div class="curve-panel-head">
+              <div class="curve-panel-title">
+                <span class="curve-panel-name">4K baseline</span>
+                <span class="curve-panel-tag">Master&nbsp;A</span>
+              </div>
+            </div>
+            <div class="curve-canvas" data-curve-canvas></div>
+            <div class="curve-readout" data-curve-readout>Hover the curve for values</div>
+          </div>
+          <div class="curve-panel" data-wizard-curve="8k">
+            <div class="curve-panel-head">
+              <div class="curve-panel-title">
+                <span class="curve-panel-name">8K baseline</span>
+                <span class="curve-panel-tag">Master&nbsp;B</span>
+              </div>
+            </div>
+            <div class="curve-canvas" data-curve-canvas></div>
+            <div class="curve-readout" data-curve-readout>Hover the curve for values</div>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-wizard-cancel>Cancel</button>
+      <button type="button" class="btn btn-primary" data-wizard-submit>Create</button>
+    </div>
+  </div>
+</div>
+
+<script id="wizard-baselines" type="application/json">{{ wizard_data | safe }}</script>

@@ -1550,6 +1550,7 @@
     bindFrameDragReorder();
     bindConfigForm();
     bindCurvePanels();
+    bindWizard();
     resumeExposurePolling();
   });
 
@@ -1771,5 +1772,159 @@
     if (v >= 10000) return (v / 1000).toFixed(0) + "k";
     if (v >= 1000) return (v / 1000).toFixed(1) + "k";
     return String(v);
+  }
+
+  // -------- wizard: create new film table -----------------------------
+
+  function bindWizard() {
+    var openBtn = document.querySelector("[data-wizard-open]");
+    var backdrop = document.getElementById("wizard-backdrop");
+    if (!openBtn || !backdrop) return;
+    var dataEl = document.getElementById("wizard-baselines");
+    if (!dataEl) return;
+    var baselines;
+    try { baselines = JSON.parse(dataEl.textContent); }
+    catch (e) { console.warn("wizard baselines parse failed", e); return; }
+
+    var form = backdrop.querySelector("#wizard-form");
+    var cancelBtn = backdrop.querySelector("[data-wizard-cancel]");
+    var submitBtn = backdrop.querySelector("[data-wizard-submit]");
+    var filterSeg = backdrop.querySelector("[data-filter-seg]");
+
+    // Track existing internal_names so we can warn on collision before submit.
+    var existingIds = Array.from(document.querySelectorAll("[data-profile-id]"))
+      .map(function (el) { return el.dataset.profileId; });
+
+    openBtn.addEventListener("click", function () {
+      backdrop.hidden = false;
+      // Reset form to defaults.
+      form.reset();
+      clearFieldError("internal_name");
+      updatePreview();
+      setTimeout(function () { form.querySelector('input[name="name"]').focus(); }, 30);
+    });
+
+    function close() { backdrop.hidden = true; }
+    cancelBtn.addEventListener("click", close);
+    backdrop.addEventListener("click", function (ev) {
+      if (ev.target === backdrop) close();
+    });
+    document.addEventListener("keydown", function (ev) {
+      if (!backdrop.hidden && ev.key === "Escape") close();
+    });
+
+    // Live preview: any field change re-renders curves.
+    form.addEventListener("change", updatePreview);
+    form.addEventListener("input", function (ev) {
+      if (ev.target.name === "internal_name") clearFieldError("internal_name");
+    });
+
+    submitBtn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      submitWizard();
+    });
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      submitWizard();
+    });
+
+    // First render with default form values (in case the page renders with
+    // the wizard hidden -- bind ResizeObserver lazily on open).
+    var panels = backdrop.querySelectorAll("[data-wizard-curve]");
+    panels.forEach(function (panel) {
+      var ro = new ResizeObserver(function () {
+        if (!backdrop.hidden) updatePreview();
+      });
+      ro.observe(panel.querySelector("[data-curve-canvas]"));
+    });
+
+    function readForm() {
+      var fd = new FormData(form);
+      return {
+        name: (fd.get("name") || "").trim(),
+        internal_name: (fd.get("internal_name") || "").trim(),
+        is_color: fd.get("type") === "color",
+        bw_filter: parseInt(fd.get("bw_filter") || "3", 10),
+        camera_type: parseInt(fd.get("camera_type") || "1", 10),
+        iso: parseInt(fd.get("iso") || "100", 10),
+      };
+    }
+
+    // B&W filter byte (per pp8k's BW_FILTER_TO_CHANNEL, verified against
+    // the device on 2026-05-16): 0=Clear (3-pass), 1=Green, 2=Red, 3=Blue.
+    var FILTER_CHANNEL = { 1: "green", 2: "red", 3: "blue" };
+
+    function updatePreview() {
+      var v = readForm();
+      var factor = baselines.ref_iso / v.iso;
+      function scale(arr) { return arr.map(function (x) { return Math.round(x * factor); }); }
+      var scaledA = scale(baselines.master_a);
+      var scaledB = scale(baselines.master_b);
+
+      // For B&W single-channel curves, draw the curve in the colour of the
+      // selected filter (the phosphor the firmware drives at exposure time).
+      var ch = FILTER_CHANNEL[v.bw_filter] || "blue";
+      panels.forEach(function (panel) {
+        var key = panel.dataset.wizardCurve;
+        var arr = key === "8k" ? scaledB : scaledA;
+        var state = {
+          data: { red: arr, green: arr, blue: arr },
+          channels: { red: ch === "red", green: ch === "green", blue: ch === "blue" },
+        };
+        renderCurvePanel(panel, state);
+      });
+    }
+
+    function setFieldError(name, msg) {
+      var el = backdrop.querySelector('[data-field-error="' + name + '"]');
+      if (!el) return;
+      el.textContent = msg;
+      el.hidden = false;
+      var input = form.querySelector('input[name="' + name + '"]');
+      if (input) input.classList.add("is-error");
+    }
+
+    function clearFieldError(name) {
+      var el = backdrop.querySelector('[data-field-error="' + name + '"]');
+      if (el) { el.textContent = ""; el.hidden = true; }
+      var input = form.querySelector('input[name="' + name + '"]');
+      if (input) input.classList.remove("is-error");
+    }
+
+    async function submitWizard() {
+      var v = readForm();
+      // Client-side checks for fast feedback.
+      if (!v.name) { toast("Name is required", "warn"); return; }
+      if (!/^[A-Za-z0-9_\-]{1,8}$/.test(v.internal_name)) {
+        setFieldError("internal_name", "Must be 1-8 chars: letters, digits, '-', '_'.");
+        return;
+      }
+      if (existingIds.indexOf(v.internal_name) !== -1) {
+        setFieldError("internal_name", "Already used by another film table. Pick a different name.");
+        return;
+      }
+
+      submitBtn.disabled = true;
+      try {
+        var res = await fetch("/api/film-tables/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(v),
+        });
+        var body = await res.json();
+        if (!res.ok) {
+          var err = body && body.error ? body.error : res.statusText;
+          if (/internal_name/.test(err)) setFieldError("internal_name", err);
+          else toast(err, "err");
+          submitBtn.disabled = false;
+          return;
+        }
+        toast("Created " + body.name, "ok");
+        location.href = "/film-tables/" + encodeURIComponent(body.id);
+      } catch (e) {
+        toast("Create failed: " + e.message, "err");
+        submitBtn.disabled = false;
+      }
+    }
   }
 })();

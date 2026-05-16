@@ -1025,3 +1025,95 @@ select.input { height: 32px; padding-right: 24px; }
 .bg-dot-black { background: #000; }
 .bg-dot-white { background: #fff; }
 .seg-bg .seg-item:has(input:checked) { box-shadow: inset 0 -2px 0 var(--accent); }
+
+/* ----- film-table create wizard ------------------------------------- */
+
+.modal.wizard {
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+}
+.modal-sub {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}
+.wizard-body {
+  display: block;
+  padding: 16px 18px;
+}
+.wizard-form {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(360px, 1.4fr);
+  gap: 20px;
+  align-items: start;
+}
+.wizard-grid { display: flex; flex-direction: column; gap: 14px; }
+.wizard-preview { display: flex; flex-direction: column; gap: 14px; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font: inherit;
+}
+.field-radio { border: none; padding: 0; margin: 0; }
+.field-label {
+  font-size: 11px;
+  color: var(--text-1);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.field input[type="text"] {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--text-0);
+  outline: none;
+}
+.field input[type="text"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(240, 164, 41, 0.15);
+}
+.field input[type="text"].is-error {
+  border-color: var(--err);
+  box-shadow: 0 0 0 2px rgba(228, 110, 110, 0.18);
+}
+.field-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.field-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.field-error {
+  font-size: 11px;
+  color: var(--err);
+}
+.seg-item.seg-item-disabled,
+.seg-item-disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Wizard curve panels are tighter than the detail-page version. */
+.wizard-preview .curve-panel {
+  padding: 10px 12px;
+}
+.wizard-preview .curve-canvas {
+  height: 160px;
+}
+
+@media (max-width: 800px) {
+  .modal.wizard { width: calc(100vw - 24px); }
+  .wizard-form { grid-template-columns: 1fr; }
+  .wizard-preview .curve-canvas { height: 140px; }
+}

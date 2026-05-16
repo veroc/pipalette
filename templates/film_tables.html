@@ -8,6 +8,9 @@
       <h1 class="panel-title">Film Tables</h1>
       <p class="panel-sub">Persistent storage for uploaded FLMs.</p>
     </div>
+    <div class="panel-actions">
+      <button type="button" class="btn btn-primary" data-wizard-open>+ Create new</button>
+    </div>
   </header>
 
   <div class="dropzone" data-dropzone>
@@ -28,8 +31,10 @@
         {% include 'partials/film_table_row.html' %}
       {% endfor %}
     {% else %}
-      <div class="empty-state">No film tables yet — upload an FLM to get started.</div>
+      <div class="empty-state">No film tables yet — upload an FLM or create one to get started.</div>
     {% endif %}
   </div>
 </section>
+
+{% include 'partials/film_table_wizard.html' %}
 {% endblock %}

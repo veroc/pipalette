@@ -35,7 +35,7 @@
       <dl class="kv">
         <dt>Type</dt><dd>{% if table.is_bw %}Black &amp; White{% else %}Color{% endif %}</dd>
         {% if table.is_bw %}
-          <dt>B&amp;W filter</dt><dd>{{ table.bw_filter_name }} ({{ table.bw_filter }})</dd>
+          <dt>B&amp;W filter</dt><dd>{{ bw_filter_label }} ({{ table.bw_filter }})</dd>
         {% endif %}
         <dt>Header flags</dt><dd>0x{{ '%02X' | format(table.flags) }}</dd>
         <dt>LUT sets</dt><dd>{{ table.lut_sets | length }}</dd>

@@ -19,10 +19,11 @@ from flask import (
 )
 
 from . import updates
+from . import wizard_baselines
 from .config import Config
 from .device import DeviceManager, discover
 from .exposure import ExposureBusyError, ExposureRunner
-from .film_tables import FilmTables, SLOT_MAX, SLOT_MIN
+from .film_tables import FilmTables, SLOT_MAX, SLOT_MIN, _bw_filter_label
 from .rolls import RollStore
 
 
@@ -163,11 +164,18 @@ def create_app(data_dir=None):
 
     @app.route("/film-tables")
     def film_tables_page():
+        wizard_data = json.dumps({
+            "master_a": list(wizard_baselines.MASTER_A_DISPLAY),
+            "master_b": list(wizard_baselines.MASTER_B_DISPLAY),
+            "ref_iso": wizard_baselines.REF_ISO,
+            "iso_options": sorted(wizard_baselines._BASE_BY_ISO.keys()),
+        })
         return render_template(
             "film_tables.html",
             view="film-tables",
             status=device.status(),
             profiles=film_tables.profiles(),
+            wizard_data=wizard_data,
         )
 
     @app.route("/film-tables/<profile_id>")
@@ -189,6 +197,7 @@ def create_app(data_dir=None):
             profile=profile,
             table=table,
             curves=curves,
+            bw_filter_label=_bw_filter_label(table.bw_filter),
             uploaded_label=_format_timestamp(profile.get("uploaded_at")),
             size_label=_format_bytes(profile.get("size", 0)),
         )
@@ -307,6 +316,28 @@ def create_app(data_dir=None):
             except Exception as exc:
                 errors.append({"filename": upload.filename, "error": str(exc)})
         return jsonify({"added": added, "errors": errors})
+
+    @app.route("/api/film-tables/new", methods=["POST"])
+    def api_film_tables_create():
+        payload = request.get_json(silent=True) or request.form.to_dict()
+        try:
+            iso = int(payload.get("iso"))
+            camera_type = int(payload.get("camera_type"))
+            bw_filter = int(payload.get("bw_filter"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "iso, camera_type, bw_filter must be integers"}), 400
+        try:
+            profile = film_tables.create(
+                name=payload.get("name", ""),
+                internal_name=payload.get("internal_name", ""),
+                is_color=_coerce_bool(payload.get("is_color", False)),
+                bw_filter=bw_filter,
+                camera_type=camera_type,
+                iso=iso,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(profile), 201
 
     @app.route("/api/film-tables/<profile_id>", methods=["DELETE"])
     def api_film_tables_delete(profile_id):
