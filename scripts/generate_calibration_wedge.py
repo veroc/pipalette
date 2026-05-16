@@ -49,10 +49,15 @@ _FONT_CANDIDATES = [
 
 
 def _load_font(size):
+    # BASIC layout engine: avoids HarfBuzz (RAQM) which shares FreeType
+    # state with pyvips in pipalette's Flask process and produces giant
+    # text masks.  See pipalette/calibration.py for context.
     for path in _FONT_CANDIDATES:
         if Path(path).exists():
             try:
-                return ImageFont.truetype(path, size)
+                return ImageFont.truetype(
+                    path, size, layout_engine=ImageFont.Layout.BASIC,
+                )
             except Exception:
                 pass
     return ImageFont.load_default()

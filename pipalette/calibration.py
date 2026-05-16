@@ -523,9 +523,14 @@ def _render_identification_image(profile, width=4096, height=2731):
     import io
     img = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(img)
+    # Force the BASIC layout engine.  Pillow's default RAQM layout
+    # (via HarfBuzz) shares global FreeType state with pyvips and ends
+    # up rendering text at ~1000x intended size when pyvips is loaded
+    # in the same process -- which is always the case in the Flask app.
     try:
         font = ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 140,
+            layout_engine=ImageFont.Layout.BASIC,
         )
     except Exception:
         font = ImageFont.load_default()
