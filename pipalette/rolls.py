@@ -399,14 +399,19 @@ class RollStore:
     def set_measurements(self, roll_id, measurements):
         """Store the densitometer measurements for a calibration roll.
 
-        `measurements` is a list of dicts {"pixel": int, "density": float}
-        or a list of (pixel, density) tuples.  Stored as dicts.
+        `measurements` is a list of dicts {"pixel": int, "density": float,
+        "resolution"?: "4k"|"8k"} or a list of (pixel, density) tuples.
+        The optional `resolution` field is preserved so the apply step
+        can split 4K (Master A) from 8K (Master B) data correctly.
         """
         normalized = []
         for m in measurements:
             if isinstance(m, dict):
-                normalized.append({"pixel": int(m["pixel"]),
-                                   "density": float(m["density"])})
+                entry = {"pixel": int(m["pixel"]),
+                         "density": float(m["density"])}
+                if m.get("resolution"):
+                    entry["resolution"] = m["resolution"]
+                normalized.append(entry)
             else:
                 px, d = m
                 normalized.append({"pixel": int(px), "density": float(d)})
