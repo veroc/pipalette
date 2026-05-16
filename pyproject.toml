@@ -12,6 +12,10 @@ dependencies = [
     # (installed by deploy/install.sh on Pi) and falls back to PIL when
     # it isn't, so this stays pulled-in even on hosts without libvips.
     "pyvips>=3.0",
+    # numpy: cubic least-squares fit for calibration LUT inversion.  The
+    # over-determined fit (31 measurements, 4 parameters) averages
+    # densitometer noise rather than tracking it.
+    "numpy>=1.24",
 ]
 
 [build-system]
