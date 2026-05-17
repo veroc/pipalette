@@ -880,7 +880,7 @@
     // Bootstrap done-frame count from the panel (rendered server-side
     // from the roll's frame statuses).  This means a mid-exposure
     // reload of the FLM page gives the modal a correct starting point.
-    var totalFrames = parseInt(panel.dataset.calTotalFrames || "33", 10);
+    var totalFrames = parseInt(panel.dataset.calTotalFrames || "35", 10);
     var doneFrames  = parseInt(panel.dataset.calDoneFrames  || "0",  10);
 
     var backdrop = document.createElement("div");
@@ -889,7 +889,7 @@
       '<div class="modal cal-progress-modal">' +
         '<div class="modal-head">' +
           '<h3 class="modal-title">Exposing calibration roll</h3>' +
-          '<p class="modal-sub">Keep the device powered until all 33 frames are exposed.</p>' +
+          '<p class="modal-sub">Keep the device powered until all ' + totalFrames + ' frames are exposed.</p>' +
         '</div>' +
         '<div class="modal-body">' +
           '<div class="cal-progress" data-cal-progress>' +

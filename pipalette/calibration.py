@@ -467,10 +467,12 @@ def build_calibrated_table(source_table, new_master_a_display,
 # ---------------------------------------------------------------------------
 
 # Calibration roll layout: one identification frame + 16 4K wedge frames
-# + 16 8K wedge frames = 33 total, fits in a 35mm roll's ~36 exposures.
-# Each wedge frame has two half-frame patches (steps 2N-1 and 2N), so
-# 16 frames cover 31 patches with the last frame's right half showing
-# an "END" marker.
+# + 16 8K wedge frames + 2 print-side reference frames = 35 total, fits
+# in a 35mm roll's ~36 exposures.  Each wedge frame has two half-frame
+# patches (steps 2N-1 and 2N), so 16 frames cover 31 patches with the
+# last frame's left half showing an "END" marker (right is step 31).
+# The reference frames are full-frame 11-step ramps (LINEAR and sRGB)
+# for visual print-side evaluation -- no densitometer measurement.
 _FRAMES_PER_RESOLUTION = 16
 
 
@@ -552,6 +554,27 @@ def create_calibration_roll(rolls_store, film_tables, profile_id):
                 src_dimensions=cached_dims[resolution],
             )
 
+    # 4. Print-side reference frames (4K static assets).  Not measured by
+    #    the densitometer step -- these print on the final paper and the
+    #    user evaluates by eye whether the chain reproduces equal
+    #    linear-light steps and/or equal sRGB-pixel-value steps faithfully.
+    reference_root = _static_reference_root()
+    for slug in ("linear", "srgb"):
+        png_path = reference_root / f"{slug}_35mm-3x2-4k.png"
+        if not png_path.is_file():
+            raise FileNotFoundError(f"missing reference asset: {png_path}")
+        raw = png_path.read_bytes()
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as probe:
+            dims = probe.size
+        _attach_prerendered_frame(
+            rolls_store, roll["id"], raw,
+            resolution="4k",
+            original_name=f"reference_{slug}_4k.png",
+            src_dimensions=dims,
+        )
+
     return rolls_store.get(roll["id"])
 
 
@@ -560,6 +583,12 @@ def _static_wedge_root():
     from pathlib import Path
     # pipalette package -> repo root -> static/calibration/wedge
     return Path(__file__).resolve().parent.parent / "static" / "calibration" / "wedge"
+
+
+def _static_reference_root():
+    """Resolve the on-disk path to the print-side reference assets."""
+    from pathlib import Path
+    return Path(__file__).resolve().parent.parent / "static" / "calibration" / "reference"
 
 
 def _attach_prerendered_frame(rolls_store, roll_id, raw_png_bytes,
@@ -652,10 +681,11 @@ def _render_identification_image(profile, width=4096, height=2731):
         f"Filter:    {profile.get('bw_filter_name', '?')}",
         f"Date:      {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "4K WEDGE: frames 02..17  (Master A, 31 steps)",
-        "8K WEDGE: frames 18..33  (Master B, 31 steps)",
+        "4K WEDGE:    frames 02..17  (Master A, 31 steps)",
+        "8K WEDGE:    frames 18..33  (Master B, 31 steps)",
+        "REFERENCES:  frames 34..35  (LINEAR + sRGB print test ramps)",
         "",
-        "Two patches per frame.  Labels show step, res, pixel value.",
+        "Two patches per wedge frame.  Labels show step, res, pixel value.",
     ]
     y = 200
     for line in lines:

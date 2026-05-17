@@ -10,9 +10,21 @@ Frame layout per resolution:
     Frames 01..15 : pairs (step 2N-1, step 2N) at the resolution
     Frame  16     : step 31 on the left, "END" marker on the right
 
+Reference wedges (one frame each, 4K only):
+    Frame  LINEAR : 11 patches at equal linear-luminance steps,
+                    sRGB-encoded (0, 89, 124, ..., 255).  Screen shows
+                    equal physical-light increments -- a print that
+                    reproduces this evenly verifies linear-light fidelity.
+    Frame  sRGB   : 11 patches at equal pixel-value steps
+                    (0, 26, 51, ..., 255).  Screen shows
+                    perceptually-uniform increments -- a print that
+                    reproduces this evenly verifies sRGB fidelity.
+
 Output:
-    static/calibration/wedge/35mm-3x2-4k/frame_NN.png  (16 files)
-    static/calibration/wedge/35mm-3x2-8k/frame_NN.png  (16 files)
+    static/calibration/wedge/35mm-3x2-4k/frame_NN.png        (16 files)
+    static/calibration/wedge/35mm-3x2-8k/frame_NN.png        (16 files)
+    static/calibration/reference/linear_35mm-3x2-4k.png      (1 file)
+    static/calibration/reference/srgb_35mm-3x2-4k.png        (1 file)
 """
 
 from pathlib import Path
@@ -22,6 +34,32 @@ from PIL import Image, ImageDraw, ImageFont
 # 31 step pixel values, linear span 0..255.
 STEP_COUNT = 31
 PIXEL_VALUES = [round(i * 255 / (STEP_COUNT - 1)) for i in range(STEP_COUNT)]
+
+
+def _srgb_oetf(linear):
+    """Linear luminance [0,1] -> sRGB-encoded pixel value [0,255]."""
+    linear = max(0.0, min(1.0, linear))
+    if linear <= 0.0031308:
+        encoded = linear * 12.92
+    else:
+        encoded = 1.055 * linear ** (1 / 2.4) - 0.055
+    return round(encoded * 255)
+
+
+# Reference wedges: 11 patches each, full pixel range.
+REFERENCE_STEP_COUNT = 11
+# Equal linear-light increments, sRGB-encoded for transmission via the
+# 8-bit driver.  An sRGB display ramps this in 10%-of-linear-light steps.
+LINEAR_WEDGE_PIXELS = tuple(
+    _srgb_oetf(i / (REFERENCE_STEP_COUNT - 1))
+    for i in range(REFERENCE_STEP_COUNT)
+)
+# Equal pixel-value increments.  An sRGB display ramps this in
+# perceptually-uniform brightness steps.
+SRGB_WEDGE_PIXELS = tuple(
+    round(i * 255 / (REFERENCE_STEP_COUNT - 1))
+    for i in range(REFERENCE_STEP_COUNT)
+)
 
 # Frame dimensions for 35mm 3:2.
 DIMS_4K = (4096, 2731)
@@ -163,6 +201,68 @@ def render_set(resolution_tag, dims, spacer, label_size, label_margin, out_dir):
         print(f"  wrote {path.relative_to(out_dir.parent.parent.parent)}  ({path.stat().st_size} bytes)")
 
 
+def _render_reference_wedge(width, height, title_font, label_font,
+                            title, pixel_values):
+    """Render an 11-step horizontal gray ramp on a 35mm 3:2 frame.
+
+    Top strip carries the wedge title (LINEAR / sRGB).  Middle strip is
+    the gray patches edge-to-edge.  Bottom strip carries the pixel-value
+    labels centered under each patch.  Both strips are black so the
+    white labels read against any patch tone."""
+    img = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(img)
+
+    header_h = title_font.size + 80
+    footer_h = label_font.size + 80
+    patch_h = height - header_h - footer_h
+
+    n = len(pixel_values)
+
+    # Patches: float-stride so total width is hit exactly at the right edge.
+    for i, px in enumerate(pixel_values):
+        x0 = round(i * width / n)
+        x1 = round((i + 1) * width / n)
+        draw.rectangle((x0, header_h, x1, header_h + patch_h), fill=px)
+
+    # Title at top, centered.
+    tw_bbox = draw.textbbox((0, 0), title, font=title_font)
+    tw = tw_bbox[2] - tw_bbox[0]
+    th = tw_bbox[3] - tw_bbox[1]
+    draw.text(((width - tw) // 2, (header_h - th) // 2), title,
+              fill=255, font=title_font)
+
+    # Labels under each patch.
+    label_y_top = header_h + patch_h + (footer_h - label_font.size) // 2
+    for i, px in enumerate(pixel_values):
+        text = f"p{px:03d}"
+        bbox = draw.textbbox((0, 0), text, font=label_font)
+        lw = bbox[2] - bbox[0]
+        cx = (round(i * width / n) + round((i + 1) * width / n)) // 2
+        draw.text((cx - lw // 2, label_y_top), text, fill=255, font=label_font)
+
+    return img
+
+
+def render_references(resolution_tag, dims, label_size, title_size, out_dir):
+    """Render the LINEAR and sRGB reference wedges for one resolution."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    title_font = _load_font(title_size)
+    label_font = _load_font(label_size)
+
+    for slug, title, pixels in (
+        ("linear", f"LINEAR · {resolution_tag} · equal linear-light steps",
+         LINEAR_WEDGE_PIXELS),
+        ("srgb", f"sRGB · {resolution_tag} · equal pixel-value steps",
+         SRGB_WEDGE_PIXELS),
+    ):
+        img = _render_reference_wedge(*dims, title_font, label_font,
+                                      title, pixels)
+        path = out_dir / f"{slug}_35mm-3x2-{resolution_tag.lower()}.png"
+        img.save(path, "PNG", optimize=True)
+        print(f"  wrote {path.relative_to(out_dir.parent.parent.parent)}"
+              f"  ({path.stat().st_size} bytes)")
+
+
 def main():
     repo_root = Path(__file__).resolve().parent.parent
     base = repo_root / "static" / "calibration" / "wedge"
@@ -175,7 +275,13 @@ def main():
     render_set("8K", DIMS_8K, SPACER_8K, LABEL_SIZE_8K, LABEL_MARGIN_8K,
                base / "35mm-3x2-8k")
 
-    print(f"\nDone.  Step pixel values: {PIXEL_VALUES}")
+    print("\nRendering 4K reference wedges (LINEAR + sRGB)...")
+    render_references("4K", DIMS_4K, LABEL_SIZE_4K, LABEL_SIZE_4K + 40,
+                      repo_root / "static" / "calibration" / "reference")
+
+    print(f"\nDone.  Wedge step pixel values: {PIXEL_VALUES}")
+    print(f"LINEAR reference pixels: {LINEAR_WEDGE_PIXELS}")
+    print(f"sRGB reference pixels:   {SRGB_WEDGE_PIXELS}")
 
 
 if __name__ == "__main__":
