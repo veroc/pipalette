@@ -1,115 +1,67 @@
-"""Bundled baseline curves for the FLM creation wizard.
+"""Bundled placeholder baseline curves for the FLM creation wizard.
 
-The two arrays below are the Master A (4K, Set 7) and Master B (8K, Set 9)
-display-space curves for an ISO 100 panchromatic B&W film, derived from a
-full sensitometric calibration round against Foma Pan 100 on 2026-05-17.
-Replaces the earlier bw100.flm-derived baseline, which was authored in the
-original Polaroid CFR tool but never tested on film and ran ~3.85x too hot
-in practice.
+New FLMs created via the wizard ship with cal_state=uncalibrated and
+the sigmoid placeholder LUT below.  The placeholder is film-agnostic
+by construction: it's the reference H&D shape from calibration_shape
+anchored at predicted ISO-100 speed-point drives (D_sp_4k=150,
+D_sp_8k=38).  No specific film's data is encoded.
 
-Calibration procedure: 31-step wedge (Stouffer T3110, 0.10 log spacing),
-exposed at both 4K and 8K on one Foma Pan 100 roll, measured on a
-calibrated transmission densitometer, inverted to LUT drives via toe-ramp
-(pixels 0-25, linear to speed point at base + fog + 0.10) + polynomial
-fit deg-3 in log(drive+1) space (pixels 25-255, grade-2 paper range
-of 1.05 log density spread across the rest of the curve).
+After the user runs "Find speed point" calibration (the first-time
+flow), the FLM is replaced with a curve anchored at the MEASURED
+speed point and the cal_state flips to "speed_point".  Refinement
+calibration further fits the curve shape to the actual film response
+once speed is known.
 
-The wizard builds new B&W 35mm FLMs by scaling these display arrays by an
-ISO factor (100 / target_iso), then encoding back to stored + scale per the
-factory layout convention (see `build_bw_35mm_lut_sets` below).
+The wizard scales these arrays by 100/iso for other ISOs -- slower
+films land at higher drives, faster films at lower.  Encoding through
+the factory master-pattern (Sets 0/2/4/6/7 = Master A; Sets 1/3/5 =
+ceil(Master A / 2); Set 8 = 2 * Master B; Set 9 = Master B) follows
+the same per-set scale offsets verified across 60/62 Polaroid factory
+FLMs: (0, +48, +32, +32, +16, +16, 0, 0, 0, 0) relative to Master A.
 
-Verified across 60/62 Polaroid factory FLMs that the per-set scale
-offsets are (0, +48, +32, +32, +16, +16, 0, 0, 0, 0) relative to Master A.
+Earlier versions of this module shipped Foma-Pan-100-derived curves as
+the baseline.  Those are kept as a reference in
+docs/reference_curves/foma_pan_100.json -- they're useful as a sanity
+check but no longer assumed to apply to every ISO-100 film.
 """
 
 import math
 
 import pp8k
 
+from . import calibration_shape
+
+
+# Predicted speed-point drives at ISO 100 (the reference).  Same values
+# the per-ISO calibration LUT centres its wedge around (calibration_lut
+# module).  At other wizard ISOs the placeholder scales by 100/iso so a
+# regular roll exposed through an uncalibrated FLM lands speed point
+# roughly at pixel 25 if the film is exactly its labeled ISO.
+PLACEHOLDER_D_SP_4K = 150.0
+PLACEHOLDER_D_SP_8K = 38.0
+PLACEHOLDER_TARGET_RANGE = 1.05  # grade-2 paper
 
 # Master A: 4K-resolution curve, loaded by firmware at HRES=4096.
-MASTER_A_DISPLAY = (
-        0,     5,    11,    16,    21,    26,    32,    37,
-       42,    48,    53,    58,    64,    69,    74,    79,
-       85,    90,    95,   101,   106,   111,   117,   122,
-      127,   132,   137,   141,   146,   150,   155,   160,
-      165,   170,   175,   180,   185,   191,   196,   202,
-      208,   214,   220,   226,   232,   239,   245,   252,
-      259,   266,   273,   280,   287,   295,   302,   310,
-      318,   326,   335,   343,   352,   361,   370,   379,
-      388,   398,   407,   417,   427,   437,   448,   459,
-      469,   480,   492,   503,   515,   527,   539,   551,
-      564,   576,   589,   603,   616,   630,   644,   658,
-      673,   687,   702,   718,   733,   749,   765,   782,
-      798,   815,   833,   850,   868,   886,   905,   924,
-      943,   962,   982,  1002,  1023,  1043,  1065,  1086,
-     1108,  1131,  1153,  1176,  1200,  1224,  1248,  1273,
-     1298,  1323,  1349,  1375,  1402,  1429,  1457,  1485,
-     1514,  1543,  1572,  1602,  1633,  1664,  1695,  1727,
-     1760,  1793,  1826,  1861,  1895,  1930,  1966,  2003,
-     2040,  2077,  2115,  2154,  2193,  2233,  2274,  2315,
-     2357,  2399,  2443,  2487,  2531,  2576,  2622,  2669,
-     2716,  2765,  2813,  2863,  2913,  2965,  3017,  3069,
-     3123,  3177,  3233,  3289,  3346,  3403,  3462,  3522,
-     3582,  3643,  3706,  3769,  3833,  3898,  3964,  4032,
-     4100,  4169,  4239,  4310,  4383,  4456,  4530,  4606,
-     4683,  4760,  4839,  4919,  5001,  5083,  5167,  5252,
-     5338,  5426,  5514,  5604,  5696,  5788,  5882,  5978,
-     6074,  6173,  6272,  6373,  6476,  6580,  6685,  6792,
-     6901,  7011,  7122,  7236,  7350,  7467,  7585,  7705,
-     7827,  7950,  8075,  8202,  8330,  8461,  8593,  8727,
-     8863,  9001,  9141,  9283,  9427,  9573,  9721,  9871,
-    10023, 10177, 10334, 10492, 10653, 10816, 10981, 11149,
-    11319, 11491, 11666, 11843, 12022, 12204, 12389, 12576,
-)
+# Sigmoid reference shape anchored at the predicted ISO-100 4K speed-point
+# drive (=150).  See calibration_shape for the H&D model.
+MASTER_A_DISPLAY = calibration_shape.place_shape(
+    PLACEHOLDER_D_SP_4K, PLACEHOLDER_TARGET_RANGE)
 
 # Master B: 8K-resolution curve, loaded by firmware at HRES=8192.
-MASTER_B_DISPLAY = (
-        0,     2,     4,     5,     7,     9,    11,    13,
-       15,    16,    18,    20,    22,    24,    25,    27,
-       29,    31,    33,    35,    36,    38,    40,    42,
-       44,    46,    47,    48,    49,    51,    52,    53,
-       55,    56,    57,    59,    60,    62,    63,    65,
-       66,    68,    69,    71,    73,    75,    76,    78,
-       80,    82,    83,    85,    87,    89,    91,    93,
-       95,    97,    99,   102,   104,   106,   108,   111,
-      113,   115,   118,   120,   123,   125,   128,   131,
-      133,   136,   139,   142,   145,   148,   151,   154,
-      157,   160,   163,   166,   169,   173,   176,   180,
-      183,   187,   190,   194,   198,   202,   206,   210,
-      214,   218,   222,   226,   230,   235,   239,   244,
-      248,   253,   258,   263,   267,   272,   278,   283,
-      288,   293,   299,   304,   310,   315,   321,   327,
-      333,   339,   345,   352,   358,   365,   371,   378,
-      385,   392,   399,   406,   413,   421,   428,   436,
-      444,   452,   460,   468,   476,   485,   493,   502,
-      511,   520,   529,   539,   548,   558,   568,   578,
-      588,   598,   609,   620,   630,   642,   653,   664,
-      676,   688,   700,   712,   724,   737,   750,   763,
-      776,   790,   804,   818,   832,   847,   861,   876,
-      892,   907,   923,   939,   955,   972,   989,  1006,
-     1024,  1041,  1059,  1078,  1097,  1116,  1135,  1155,
-     1175,  1195,  1216,  1237,  1259,  1281,  1303,  1326,
-     1349,  1372,  1396,  1421,  1445,  1471,  1496,  1522,
-     1549,  1576,  1604,  1632,  1660,  1689,  1719,  1749,
-     1780,  1811,  1843,  1875,  1908,  1942,  1976,  2011,
-     2046,  2082,  2119,  2156,  2195,  2233,  2273,  2313,
-     2354,  2396,  2439,  2482,  2527,  2572,  2618,  2664,
-     2712,  2761,  2810,  2861,  2912,  2965,  3018,  3073,
-     3128,  3185,  3243,  3302,  3362,  3423,  3486,  3549,
-)
+# Same shape, anchored at the predicted ISO-100 8K speed-point drive (=38).
+MASTER_B_DISPLAY = calibration_shape.place_shape(
+    PLACEHOLDER_D_SP_8K, PLACEHOLDER_TARGET_RANGE)
 
-# The calibrated baselines above are authored at ISO 100.  Scaling target
-# is REF_ISO / target_iso.
+# The placeholder baselines above are anchored at ISO 100.  Scaling
+# target is REF_ISO / target_iso (slower films need higher drives).
 REF_ISO = 100
 
 # Base scale per ISO -- picks the scale factor for Master A (Set 7).
-# Lower-ISO films need larger display values, which means larger base to
-# keep stored u16.  Tuned for the calibrated baseline (Master A peak
-# 12576 at ISO 100): base 1 fits ISOs 50-800; ISO 25 (peak ~50k) needs
-# base 2.  Headroom is also reserved so Set 8 (= 2 * Master B stored)
-# can't overflow.
-_BASE_BY_ISO = {25: 2, 50: 1, 100: 1, 200: 1, 400: 1, 800: 1}
+# With the sigmoid placeholder (peak ~340 at ISO 100), base=1 fits the
+# full ISO range comfortably: ISO 25 peak is ~1350, still well inside
+# u16.  We keep the per-ISO map so post-calibration FLMs with much
+# larger peaks can override these defaults if needed.
+_BASE_BY_ISO = {25: 1, 50: 1, 100: 1, 200: 1, 400: 1, 800: 1}
 
 # --------------------------------------------------------------------
 # FLM format constants -- field-by-field, matching the spec in
