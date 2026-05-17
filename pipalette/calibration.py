@@ -26,7 +26,7 @@ import math
 import numpy as np
 import pp8k
 
-from . import wizard_baselines
+from . import calibration_shape, wizard_baselines
 
 
 # Grade-2 paper handles ~1.05 log density (ISO range).  Other grades:
@@ -244,6 +244,108 @@ def _running_max(values):
             m = v
         out.append(m)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Speed-point calibration (first-time, single-measurement)
+# ---------------------------------------------------------------------------
+# Refinement assumes the LUT is already close.  For a brand-new
+# film/dev/process combo we don't know that, and the 31-step wedge
+# through an arbitrary starting LUT may have no useful samples around
+# the actual speed point.  Speed-point calibration solves this by:
+#
+#   1. Exposing the wedge through a KNOWN linear LUT (calibration_lut)
+#      so drives are pre-determined, log-spaced, and independent of
+#      whatever curve the wizard placed.
+#   2. Measuring density at 24 log-spaced drives that span ±2 stops
+#      around the predicted speed point for the labeled ISO.
+#   3. Interpolating to find the drive at which density crosses
+#      b+f + 0.10 -- that drive IS the speed point on this film+dev.
+#   4. Placing a reference H&D shape (see calibration_shape) anchored
+#      at the measured speed-point drive, so the output LUT has a
+#      film-physics-plausible curve even though we only measured one
+#      point.
+#
+# After that, refinement (correct_lut) can fine-tune the curve shape
+# from a 31-step wedge through the now-close LUT.
+
+
+def find_speed_point(measurements, sp_offset=SPEED_POINT_OFFSET):
+    """Find the drive level where density crosses b+f + sp_offset.
+
+    Args:
+        measurements: sequence of (drive, density) pairs in increasing
+            drive order.  Drives are absolute display-space values
+            (the calibration LUT applies them directly without
+            further scaling per-pixel).
+        sp_offset: density above b+f that defines the speed point
+            (ISO 6:1993 -> 0.10).
+
+    Returns: speed-point drive (float).
+    Raises ValueError if the speed-point density is outside the
+    measured range -- caller should bracket the wedge differently.
+    """
+    if len(measurements) < 4:
+        raise ValueError("need at least 4 measurements")
+    drives = [float(m[0]) for m in measurements]
+    densities = [float(m[1]) for m in measurements]
+    if drives != sorted(drives):
+        raise ValueError("measurements must be in increasing drive order")
+    if drives[0] <= 0:
+        raise ValueError("first drive must be > 0 (cannot take log of zero)")
+
+    b_plus_f = min(densities)
+    target = b_plus_f + sp_offset
+
+    # Running-max smoothing so a noisy reading doesn't push the speed
+    # point past where the film actually crossed it.
+    smooth = _running_max(densities)
+
+    if target < smooth[0]:
+        raise ValueError(
+            f"speed-point density {target:.3f} below lowest measured "
+            f"{smooth[0]:.3f} -- wedge starts too hot (drives too high)"
+        )
+    if target > smooth[-1]:
+        raise ValueError(
+            f"speed-point density {target:.3f} above highest measured "
+            f"{smooth[-1]:.3f} -- wedge tops out too low (drives too low) "
+            f"or film responds very slowly"
+        )
+
+    # Linear interpolation in log-drive space, between the bracket
+    # whose densities straddle the target.
+    for i in range(len(smooth) - 1):
+        if smooth[i] <= target <= smooth[i + 1]:
+            d0, d1 = smooth[i], smooth[i + 1]
+            l0, l1 = math.log(drives[i]), math.log(drives[i + 1])
+            if d1 == d0:
+                return drives[i]
+            t = (target - d0) / (d1 - d0)
+            return math.exp(l0 + t * (l1 - l0))
+    # Fallthrough only if smooth is non-monotonic past the running_max
+    # call, which is impossible by construction.
+    raise AssertionError("unreachable: target bracketed but not found")
+
+
+def build_speedpoint_lut(D_sp_4k, D_sp_8k,
+                         target_range=PAPER_GRADE_RANGE[2]):
+    """Build (Master A display, Master B display) from measured speed points.
+
+    Args:
+        D_sp_4k, D_sp_8k: measured speed-point drives at each resolution.
+        target_range: density range above speed point to span across
+            pixels ZONE_I_PIXEL+1 .. 255 (default grade-2 paper = 1.05).
+
+    Returns (master_a_display, master_b_display) -- two 256-tuples
+    suitable for build_calibrated_table().  Both follow the reference
+    H&D shape anchored at their respective speed-point drives.
+    """
+    master_a = calibration_shape.place_shape(
+        D_sp_4k, target_range, zone_i_pixel=ZONE_I_PIXEL)
+    master_b = calibration_shape.place_shape(
+        D_sp_8k, target_range, zone_i_pixel=ZONE_I_PIXEL)
+    return master_a, master_b
 
 
 # ---------------------------------------------------------------------------
