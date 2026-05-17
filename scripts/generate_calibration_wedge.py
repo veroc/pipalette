@@ -65,11 +65,18 @@ def _load_font(size):
 
 def _frame_pairings():
     """Yield (left_step, right_step) for each frame, 1-indexed step
-    numbers.  Last frame's right slot is None (the END marker)."""
+    numbers.  Higher-numbered step on the left, lower on the right --
+    the recorder pulls the film fully into the canister at load and
+    exposes "backwards", so frames sit in reverse order on the developed
+    strip.  Putting the higher step on the left of each frame means a
+    right-to-left read of the developed strip walks the wedge in clean
+    ascending order S01, S02, ..., S31, END.
+
+    Last frame's left slot is None (the END marker)."""
     for i in range(0, STEP_COUNT, 2):
-        left = i + 1
-        right = i + 2 if i + 1 < STEP_COUNT else None
-        yield left, right
+        lower = i + 1
+        upper = i + 2 if i + 1 < STEP_COUNT else None
+        yield upper, lower
 
 
 def _draw_text_with_outline(draw, xy, text, font, fill, outline):
@@ -85,22 +92,24 @@ def _draw_text_with_outline(draw, xy, text, font, fill, outline):
 
 def _render_frame(width, height, spacer, font, label_margin,
                   resolution_tag, left_step, right_step):
-    """Render a single calibration frame with two labeled patches."""
+    """Render a single calibration frame with two labeled patches.
+
+    Either side may be `None`, which renders the END marker (black
+    background, "END" label) on that side."""
     img = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(img)
     half = (width - spacer) // 2
-
-    left_px = PIXEL_VALUES[left_step - 1]
-    draw.rectangle((0, 0, half, height), fill=left_px)
-
     right_x = half + spacer
-    if right_step is not None:
-        right_px = PIXEL_VALUES[right_step - 1]
-        draw.rectangle((right_x, 0, width, height), fill=right_px)
-    else:
-        # END marker: the right half is plain gray (mid-tone) with a
-        # large label so it's unambiguous as "end of wedge".
-        right_px = None
+
+    def _fill_patch(step, x0, x1):
+        if step is None:
+            return None
+        px = PIXEL_VALUES[step - 1]
+        draw.rectangle((x0, 0, x1, height), fill=px)
+        return px
+
+    left_px = _fill_patch(left_step, 0, half)
+    right_px = _fill_patch(right_step, right_x, width)
 
     # Spacer: alternating black/white horizontal stripes so the
     # divider stays visible regardless of the adjacent patch tones
@@ -121,27 +130,21 @@ def _render_frame(width, height, spacer, font, label_margin,
     # Labels: bottom-left of each half.
     label_y = height - label_margin - font.size
 
-    left_text = f"S{left_step:02d} · {resolution_tag} · p{left_px:03d}"
-    left_fill = 255 if left_px < 128 else 0
-    left_outline = 0 if left_px < 128 else 255
-    _draw_text_with_outline(
-        draw, (label_margin, label_y), left_text, font, left_fill, left_outline,
-    )
+    def _label_patch(step, px, x_anchor):
+        if step is None:
+            _draw_text_with_outline(
+                draw, (x_anchor, label_y), f"{resolution_tag} END",
+                font, 255, 0,
+            )
+            return
+        text = f"S{step:02d} · {resolution_tag} · p{px:03d}"
+        fill = 255 if px < 128 else 0
+        outline = 0 if px < 128 else 255
+        _draw_text_with_outline(draw, (x_anchor, label_y), text, font,
+                                fill, outline)
 
-    if right_step is not None:
-        right_text = f"S{right_step:02d} · {resolution_tag} · p{right_px:03d}"
-        right_fill = 255 if right_px < 128 else 0
-        right_outline = 0 if right_px < 128 else 255
-        _draw_text_with_outline(
-            draw, (right_x + label_margin, label_y), right_text, font,
-            right_fill, right_outline,
-        )
-    else:
-        _draw_text_with_outline(
-            draw, (right_x + label_margin, label_y),
-            f"{resolution_tag} END",
-            font, 255, 0,
-        )
+    _label_patch(left_step, left_px, label_margin)
+    _label_patch(right_step, right_px, right_x + label_margin)
 
     return img
 
