@@ -26,6 +26,7 @@ from . import wizard_baselines
 from .config import Config
 from .device import DeviceManager, discover
 from .exposure import ExposureBusyError, ExposureRunner
+from . import film_tables as film_tables_mod
 from .film_tables import FilmTables, SLOT_MAX, SLOT_MIN, _bw_filter_label
 from .rolls import RollStore
 
@@ -381,14 +382,49 @@ def create_app(data_dir=None):
         ok = film_tables.delete(profile_id)
         return ("", 204) if ok else ("", 404)
 
+    @app.route("/api/film-tables/<profile_id>/calibrate-speedpoint",
+               methods=["POST"])
+    def api_film_tables_calibrate_speedpoint(profile_id):
+        """Create a SPEED-POINT calibration roll for the given film table.
+
+        First-time calibration: wedge spans +-2 stops around the predicted
+        speed-point drive for the FLM's labeled ISO.  The roll is exposed
+        through a per-ISO calibration LUT, not the user's target FLM, so
+        the drive at each patch is deterministic and toe coverage is
+        guaranteed regardless of how off the target's curve is.
+        """
+        try:
+            roll = calibration.create_speedpoint_roll(
+                rolls, film_tables, profile_id,
+            )
+        except KeyError:
+            return jsonify({"error": "film table not found"}), 404
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 410
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(roll), 201
+
     @app.route("/api/film-tables/<profile_id>/calibrate", methods=["POST"])
     def api_film_tables_calibrate(profile_id):
-        """Create a calibration roll for the given film table.
+        """Create a REFINEMENT calibration roll for the given film table.
 
+        Run after speed-point calibration to fine-tune the curve shape.
         Roll appears under /rolls and is populated with one ID frame
         plus 31 flat-tone wedge frames. After exposure and development
         the user enters densities via POST /api/calibration/<roll_id>.
         """
+        profile = film_tables.profile(profile_id)
+        if profile is None:
+            return jsonify({"error": "film table not found"}), 404
+        # Refinement only makes sense once speed-point has placed the
+        # LUT close.  Reject early with a clear hint to the UI rather
+        # than letting the user expose a wasted roll.
+        if profile.get("cal_state") == film_tables_mod.CAL_STATE_UNCALIBRATED:
+            return jsonify({
+                "error": "refinement requires a prior speed-point calibration; "
+                         "run /api/film-tables/<id>/calibrate-speedpoint first",
+            }), 409
         try:
             roll = calibration.create_calibration_roll(
                 rolls, film_tables, profile_id,
@@ -525,6 +561,132 @@ def create_app(data_dir=None):
             "uploaded_at": int(time.time()),
             "calibrated_from": source_profile_id,
             "calibration_roll": roll_id,
+            "cal_state": film_tables_mod.CAL_STATE_REFINED,
+        }
+        with film_tables._lock:
+            film_tables._index["profiles"].append(new_profile)
+            film_tables._save()
+        return jsonify(new_profile), 201
+
+    @app.route("/api/calibration/<roll_id>/apply-speedpoint", methods=["POST"])
+    def api_calibration_apply_speedpoint(roll_id):
+        """Compute D_sp_4k and D_sp_8k from the speed-point roll's
+        measurements, then build a new FLM whose LUT lands the speed
+        point at pixel 25 with a sigmoid-shape working range above it.
+
+        Writes the new FLM with cal_state=speed_point and returns the
+        new profile dict.  Refinement is enabled on the new profile.
+        """
+        from . import calibration_lut
+
+        payload = request.get_json(silent=True) or {}
+        try:
+            target_range = float(
+                payload.get("target_range", calibration.PAPER_GRADE_RANGE[2])
+            )
+        except (TypeError, ValueError):
+            return jsonify({"error": "target_range must be a float"}), 400
+
+        roll = rolls.get(roll_id)
+        if roll is None:
+            return jsonify({"error": "roll not found"}), 404
+        if roll.get("calibration_mode") != "speed_point":
+            return jsonify({"error": "roll is not a speed-point roll"}), 400
+        meas = roll.get("measurements") or []
+        if len(meas) < 4:
+            return jsonify({"error": "no measurements stored yet"}), 400
+
+        source_profile_id = roll["calibration_for"]
+        source = film_tables.read_table(source_profile_id)
+        if source is None:
+            return jsonify({"error": "source film table missing"}), 410
+        source_profile = film_tables.profile(source_profile_id)
+        iso = source_profile.get("iso")
+        if iso is None:
+            return jsonify({"error": "source profile has no iso"}), 400
+
+        # Convert (pixel, density) to (drive, density) per resolution
+        # using the calibration LUT's known patch drives.  Pixel value
+        # i corresponds to the i-th log-spaced wedge drive.
+        drives_4k = calibration_lut.wedge_drives(
+            calibration_lut.predicted_speed_point(iso, "4k"))
+        drives_8k = calibration_lut.wedge_drives(
+            calibration_lut.predicted_speed_point(iso, "8k"))
+
+        def _to_drive_pairs(measurements, drives):
+            pairs = []
+            for m in measurements:
+                pixel = int(m["pixel"])
+                # patch index = pixel value (1..N_PATCHES); drives[i] is
+                # for patch i+1.  Pixels outside the patch range are
+                # dropped (caller probably picked the wrong wedge).
+                if 1 <= pixel <= len(drives):
+                    pairs.append((float(drives[pixel - 1]),
+                                  float(m["density"])))
+            pairs.sort(key=lambda t: t[0])
+            return pairs
+
+        pairs_4k = _to_drive_pairs(
+            (m for m in meas if m.get("resolution") == "4k"), drives_4k)
+        pairs_8k = _to_drive_pairs(
+            (m for m in meas if m.get("resolution") == "8k"), drives_8k)
+        if len(pairs_4k) < 4 and len(pairs_8k) < 4:
+            return jsonify({
+                "error": "need at least 4 measurements per resolution"
+            }), 400
+
+        try:
+            D_sp_4k = (calibration.find_speed_point(pairs_4k)
+                       if len(pairs_4k) >= 4 else None)
+            D_sp_8k = (calibration.find_speed_point(pairs_8k)
+                       if len(pairs_8k) >= 4 else None)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 422
+
+        # If one resolution wasn't measured, fall back to the 4x ratio
+        # convention (Master B drives ~ Master A / 4).
+        if D_sp_4k is None and D_sp_8k is not None:
+            D_sp_4k = D_sp_8k * 4
+        if D_sp_8k is None and D_sp_4k is not None:
+            D_sp_8k = D_sp_4k / 4
+        if D_sp_4k is None or D_sp_8k is None:
+            return jsonify({"error": "could not compute speed points"}), 422
+
+        new_a, new_b = calibration.build_speedpoint_lut(
+            D_sp_4k, D_sp_8k, target_range=target_range)
+
+        existing_ids = {p["id"] for p in film_tables.profiles()}
+        new_internal = calibration.next_versioned_name(
+            source_profile_id, existing_ids,
+        )
+        new_table = calibration.build_calibrated_table(
+            source, new_a, new_internal_name=new_internal,
+            new_name=source.name, new_master_b_display=new_b,
+        )
+        raw = pp8k.serialize_flm(new_table)
+        ft_files = film_tables._files_dir
+        ft_files.mkdir(parents=True, exist_ok=True)
+        filename = new_internal + ".flm"
+        (ft_files / filename).write_bytes(raw)
+        new_profile = {
+            "id": new_internal,
+            "filename": filename,
+            "original_name": filename,
+            "name": new_table.name,
+            "camera_type": new_table.camera_type_name,
+            "is_bw": bool(new_table.is_bw),
+            "bw_filter": new_table.bw_filter,
+            "bw_filter_name": source.bw_filter_name,
+            "aspect_w": new_table.aspect_w,
+            "aspect_h": new_table.aspect_h,
+            "size": len(raw),
+            "iso": iso,
+            "uploaded_at": int(time.time()),
+            "calibrated_from": source_profile_id,
+            "calibration_roll": roll_id,
+            "cal_state": film_tables_mod.CAL_STATE_SPEED_POINT,
+            "D_sp_4k": round(D_sp_4k, 1),
+            "D_sp_8k": round(D_sp_8k, 1),
         }
         with film_tables._lock:
             film_tables._index["profiles"].append(new_profile)

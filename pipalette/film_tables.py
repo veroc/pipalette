@@ -26,6 +26,16 @@ SLOT_MIN = 0
 SLOT_MAX = 19
 
 
+# Calibration provenance carried per profile.  Drives the dual-mode
+# calibration UI: speed-point calibration is always available, but
+# refinement is gated until a speed-point round has run (or the user
+# has explicitly chosen to skip it).
+CAL_STATE_UNCALIBRATED = "uncalibrated"
+CAL_STATE_SPEED_POINT = "speed_point"
+CAL_STATE_REFINED = "refined"
+CAL_STATES = (CAL_STATE_UNCALIBRATED, CAL_STATE_SPEED_POINT, CAL_STATE_REFINED)
+
+
 class FilmTables:
     """Flat-file store of FLM blobs + a JSON metadata index.
 
@@ -58,7 +68,8 @@ class FilmTables:
         backfilled = self._backfill_profiles()
         migrated = self._migrate_to_internal_name_keys()
         relabeled = self._refresh_bw_filter_labels()
-        if backfilled or migrated or relabeled or had_assignments:
+        cal_state_added = self._backfill_cal_state()
+        if backfilled or migrated or relabeled or had_assignments or cal_state_added:
             self._save()
 
     def _backfill_profiles(self):
@@ -79,6 +90,22 @@ class FilmTables:
             p["bw_filter"] = flm.bw_filter
             p.setdefault("bw_filter_name", flm.bw_filter_name)
             changed = True
+        return changed
+
+    def _backfill_cal_state(self):
+        """Default missing cal_state to 'uncalibrated' on existing profiles.
+
+        Profiles uploaded or wizard-created before this field was added
+        don't carry any calibration provenance.  The conservative choice
+        is to mark them uncalibrated so the UI prompts the user to run
+        speed-point calibration before enabling refinement.  The user can
+        skip if the profile is already known-good in their workflow.
+        """
+        changed = False
+        for p in self._index["profiles"]:
+            if "cal_state" not in p:
+                p["cal_state"] = CAL_STATE_UNCALIBRATED
+                changed = True
         return changed
 
     def _refresh_bw_filter_labels(self):
@@ -198,6 +225,7 @@ class FilmTables:
                 "aspect_h": flm.aspect_h,
                 "size": len(flm.encrypted_data),
                 "uploaded_at": int(time.time()),
+                "cal_state": CAL_STATE_UNCALIBRATED,
             }
             self._index["profiles"].append(profile)
             self._save()
@@ -284,10 +312,25 @@ class FilmTables:
                 "size": len(raw),
                 "iso": iso,
                 "uploaded_at": int(time.time()),
+                "cal_state": CAL_STATE_UNCALIBRATED,
             }
             self._index["profiles"].append(profile)
             self._save()
             return dict(profile)
+
+    def set_cal_state(self, profile_id, state):
+        """Update the cal_state for a profile.  Used by the calibration
+        apply endpoints after a successful round."""
+        if state not in CAL_STATES:
+            raise ValueError(f"invalid cal_state {state!r}; "
+                             f"valid: {CAL_STATES}")
+        with self._lock:
+            for p in self._index["profiles"]:
+                if p["id"] == profile_id:
+                    p["cal_state"] = state
+                    self._save()
+                    return dict(p)
+            raise KeyError(profile_id)
 
     def delete(self, profile_id):
         with self._lock:

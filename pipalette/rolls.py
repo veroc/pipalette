@@ -164,7 +164,7 @@ class RollStore:
     # ---- mutations: rolls ----------------------------------------------
 
     def create(self, name, profile, flm_bytes, bw_filter=None,
-               calibration_for=None):
+               calibration_for=None, calibration_mode=None):
         """Create a roll from a film-table profile + its FLM bytes.
 
         `profile` is the dict returned by FilmTables — we snapshot its
@@ -178,6 +178,12 @@ class RollStore:
         If `calibration_for` is set to a film-table profile id, the
         roll is marked as a calibration session for that film table --
         the UI uses this to show the measurement-entry workflow.
+        `calibration_mode` distinguishes "speed_point" (first-time
+        wedge through a known calibration LUT) from "refinement"
+        (31-step wedge through the target FLM).  Defaults to
+        "refinement" if a calibration is being created without an
+        explicit mode (backward compat with rolls that predate the
+        speed-point flow).
         """
         if not name or not name.strip():
             raise ValueError("name is required")
@@ -216,6 +222,7 @@ class RollStore:
         }
         if calibration_for:
             roll["calibration_for"] = calibration_for
+            roll["calibration_mode"] = calibration_mode or "refinement"
             roll["measurements"] = []  # filled when the user enters densities
         with self._lock:
             self._index["rolls"].append(roll)

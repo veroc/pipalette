@@ -617,10 +617,11 @@ def create_calibration_roll(rolls_store, film_tables, profile_id):
     if (profile.get("aspect_w"), profile.get("aspect_h")) != (3, 2):
         raise ValueError("v1 calibration is 35mm 3:2 only")
 
-    roll_name = f"Calibration: {profile.get('name', profile_id)}"
+    roll_name = f"Refinement: {profile.get('name', profile_id)}"
     roll = rolls_store.create(
         roll_name, profile, flm_bytes,
         bw_filter=bw_filter, calibration_for=profile_id,
+        calibration_mode="refinement",
     )
 
     # 1. Identification frame (dynamic).  Generated at 4K and attached
@@ -660,6 +661,117 @@ def create_calibration_roll(rolls_store, film_tables, profile_id):
     #    the densitometer step -- these print on the final paper and the
     #    user evaluates by eye whether the chain reproduces equal
     #    linear-light steps and/or equal sRGB-pixel-value steps faithfully.
+    reference_root = _static_reference_root()
+    for slug in ("linear", "srgb"):
+        png_path = reference_root / f"{slug}_35mm-3x2-4k.png"
+        if not png_path.is_file():
+            raise FileNotFoundError(f"missing reference asset: {png_path}")
+        raw = png_path.read_bytes()
+        import io
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as probe:
+            dims = probe.size
+        _attach_prerendered_frame(
+            rolls_store, roll["id"], raw,
+            resolution="4k",
+            original_name=f"reference_{slug}_4k.png",
+            src_dimensions=dims,
+        )
+
+    return rolls_store.get(roll["id"])
+
+
+def create_speedpoint_roll(rolls_store, film_tables, profile_id):
+    """Create a SPEED-POINT calibration roll for the given profile.
+
+    Differs from refinement (create_calibration_roll) in two ways:
+
+    1. The roll is exposed through a per-ISO calibration LUT (built
+       from calibration_lut), not the user's target FLM.  The
+       calibration LUT encodes 24 log-spaced drives at pixels 1..24,
+       so the user gets clean ±2-stop coverage around the predicted
+       speed point regardless of how off the target FLM's curve is.
+    2. The wedge frames are rendered ON DEMAND (wedge_render) with
+       per-patch drive labels baked in, so the densitometer entry
+       grid doesn't need any per-roll metadata file -- the labels
+       on the developed film are self-describing.
+
+    Roll layout: 1 ID + 12 4K wedge + 12 8K wedge + 2 reference frames
+    = 27 frames (fits in a 36-exposure roll comfortably).
+    """
+    from . import calibration_lut, wedge_render
+    profile = film_tables.profile(profile_id)
+    if profile is None:
+        raise KeyError(profile_id)
+    bw_filter = profile.get("bw_filter")
+    if profile.get("is_bw") and bw_filter not in (1, 2, 3):
+        raise ValueError(
+            "speed-point calibration requires a B&W FLM with filter 1/2/3"
+        )
+    if (profile.get("aspect_w"), profile.get("aspect_h")) != (3, 2):
+        raise ValueError("speed-point calibration is 35mm 3:2 only")
+    iso = profile.get("iso")
+    if iso is None:
+        raise ValueError(
+            "profile is missing iso -- can't predict speed-point drive"
+        )
+
+    template = film_tables.read_table(profile_id)
+    if template is None:
+        raise FileNotFoundError(f"profile {profile_id} missing FLM bytes")
+
+    # Build the per-ISO calibration LUT FLM that becomes the roll's
+    # exposure profile.  Pixel i (i=1..24) -> log-spaced drive i.
+    cal_flm_bytes = calibration_lut.build_calibration_flm_bytes(template, iso)
+
+    roll_name = f"Speed-point: {profile.get('name', profile_id)}"
+    roll = rolls_store.create(
+        roll_name, profile, cal_flm_bytes,
+        bw_filter=bw_filter, calibration_for=profile_id,
+        calibration_mode="speed_point",
+    )
+
+    # 1. Identification frame -- subtitled for the speed-point flow.
+    id_bytes = _render_identification_image(
+        profile,
+        mode_label="SPEED-POINT CALIBRATION",
+        wedge_legend=[
+            f"4K WEDGE:    frames 02..13  (24 patches, +-2 stops around predicted ISO {iso} D_sp)",
+            f"8K WEDGE:    frames 14..25  (24 patches, +-2 stops around predicted ISO {iso} D_sp)",
+            "REFERENCES:  frames 26..27  (LINEAR + sRGB print test ramps)",
+        ],
+    )
+    _attach_prerendered_frame(
+        rolls_store, roll["id"], id_bytes,
+        resolution="4k",
+        original_name="00_identification.png",
+        src_dimensions=(4096, 2731),
+    )
+
+    # 2 + 3. 4K and 8K wedge frames, rendered on demand from the
+    #        wedge_render module.  Each frame carries two patches with
+    #        per-patch drive labels.
+    for resolution in ("4k", "8k"):
+        cached_dims = None
+        frame_n = 0
+        for left, right in wedge_render.frame_pairs():
+            frame_n += 1
+            raw = wedge_render.render_frame(iso, resolution, left, right)
+            if cached_dims is None:
+                import io
+                from PIL import Image
+                with Image.open(io.BytesIO(raw)) as probe:
+                    cached_dims = probe.size
+            _attach_prerendered_frame(
+                rolls_store, roll["id"], raw,
+                resolution=resolution,
+                original_name=f"{resolution}_speedpoint_{frame_n:02d}.png",
+                src_dimensions=cached_dims,
+            )
+
+    # 4. Print-side reference frames (4K static assets).  Same set the
+    #    refinement roll attaches -- they describe screen-to-print
+    #    fidelity, which is orthogonal to the wedge type.
     reference_root = _static_reference_root()
     for slug in ("linear", "srgb"):
         png_path = reference_root / f"{slug}_35mm-3x2-4k.png"
@@ -756,12 +868,24 @@ def _attach_prerendered_frame(rolls_store, roll_id, raw_png_bytes,
     return rolls_store._find(roll_id)["frames"][-1]
 
 
-def _render_identification_image(profile, width=4096, height=2731):
+def _render_identification_image(profile, width=4096, height=2731,
+                                 mode_label="REFINEMENT CALIBRATION",
+                                 wedge_legend=None):
     """Return PNG bytes of a black-background identification frame with
-    the film name, internal name, current date, and roll legend."""
+    the film name, internal name, current date, and roll legend.
+
+    mode_label and wedge_legend let the speed-point flow override the
+    title and frame-range lines without duplicating this whole renderer.
+    """
     import time
     from PIL import Image, ImageDraw, ImageFont
     import io
+    if wedge_legend is None:
+        wedge_legend = [
+            "4K WEDGE:    frames 02..17  (Master A, 31 steps)",
+            "8K WEDGE:    frames 18..33  (Master B, 31 steps)",
+            "REFERENCES:  frames 34..35  (LINEAR + sRGB print test ramps)",
+        ]
     img = Image.new("L", (width, height), 0)
     draw = ImageDraw.Draw(img)
     # Force the BASIC layout engine.  Pillow's default RAQM layout
@@ -776,16 +900,14 @@ def _render_identification_image(profile, width=4096, height=2731):
     except Exception:
         font = ImageFont.load_default()
     lines = [
-        "piPalette CALIBRATION ROLL",
+        f"piPalette {mode_label} ROLL",
         "",
         f"Film:      {profile.get('name', '(unnamed)')}",
         f"Internal:  {profile.get('id')}",
         f"Filter:    {profile.get('bw_filter_name', '?')}",
         f"Date:      {time.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "4K WEDGE:    frames 02..17  (Master A, 31 steps)",
-        "8K WEDGE:    frames 18..33  (Master B, 31 steps)",
-        "REFERENCES:  frames 34..35  (LINEAR + sRGB print test ramps)",
+        *wedge_legend,
         "",
         "Two patches per wedge frame.  Labels show step, res, pixel value.",
     ]
