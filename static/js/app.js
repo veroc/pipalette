@@ -810,7 +810,10 @@
       applyUpdate(target.dataset.target);
     } else if (action === "cal-create-roll") {
       ev.preventDefault();
-      calCreateRoll(target.dataset.profileId, target);
+      calCreateRoll(target.dataset.profileId, target, "refinement");
+    } else if (action === "cal-create-speedpoint-roll") {
+      ev.preventDefault();
+      calCreateRoll(target.dataset.profileId, target, "speed_point");
     } else if (action === "cal-start-exposure") {
       ev.preventDefault();
       var pStart = target.closest("[data-calibration-panel]");
@@ -840,7 +843,7 @@
 
   // -------- calibration (v2: dual-resolution, FLM-page driven) -------
 
-  async function calCreateRoll(profileId, btn) {
+  async function calCreateRoll(profileId, btn, mode) {
     var originalText = null;
     if (btn) {
       btn.disabled = true;
@@ -848,12 +851,13 @@
       btn.classList.add("is-busy");
       btn.textContent = "Preparing roll…";
     }
+    var endpoint = (mode === "speed_point")
+      ? "/api/film-tables/" + encodeURIComponent(profileId) + "/calibrate-speedpoint"
+      : "/api/film-tables/" + encodeURIComponent(profileId) + "/calibrate";
     try {
-      await jsonFetch(
-        "/api/film-tables/" + encodeURIComponent(profileId) + "/calibrate",
-        { method: "POST" },
-      );
-      toast("Calibration roll prepared", "ok");
+      await jsonFetch(endpoint, { method: "POST" });
+      toast((mode === "speed_point" ? "Speed-point" : "Refinement")
+            + " calibration roll prepared", "ok");
       location.reload();
     } catch (err) {
       toast("Couldn't start calibration: " + err.message, "err");
@@ -1055,18 +1059,66 @@
         '</div>'
       );
     }
-    var any = data.diagnostic_4k || data.diagnostic_8k;
-    var html =
-      '<div class="cal-blocks">' +
-        block("4K (Master A)", data.diagnostic_4k) +
-        block("8K (Master B)", data.diagnostic_8k) +
-      '</div>';
-    var canApply = any && (
-      [data.diagnostic_4k, data.diagnostic_8k].every(function (d) {
-        return !d || d.verdict === "ok" || d.verdict === "lut_fixable" ||
-               d.verdict === "global_underexposure";
-      })
-    );
+
+    function spBlock(title, sp) {
+      if (!sp) return "";
+      if (sp.error) {
+        return (
+          '<div class="cal-block-result">' +
+            '<h4 class="cal-block-result-title">' + title +
+              ' <span class="cal-verdict cal-verdict-' + sp.verdict + '">' +
+                sp.verdict.replace(/_/g, " ") +
+              '</span>' +
+            '</h4>' +
+            '<p class="cal-err">' + sp.error + '</p>' +
+          '</div>'
+        );
+      }
+      var rows = [
+        ["b+f", sp.b_plus_f.toFixed(3)],
+        ["D_max", sp.d_max.toFixed(3)],
+        ["Recovered D_sp", sp.D_sp.toFixed(1)],
+        ["Patches", sp.patches],
+      ];
+      var rowsHtml = rows.map(function (r) {
+        return "<dt>" + r[0] + "</dt><dd>" + r[1] + "</dd>";
+      }).join("");
+      return (
+        '<div class="cal-block-result">' +
+          '<h4 class="cal-block-result-title">' + title +
+            ' <span class="cal-verdict cal-verdict-ok">speed point recovered</span>' +
+          '</h4>' +
+          '<dl class="cal-stats">' + rowsHtml + '</dl>' +
+        '</div>'
+      );
+    }
+
+    var html;
+    var canApply;
+    if (data.speedpoint_4k || data.speedpoint_8k) {
+      html =
+        '<div class="cal-blocks">' +
+          spBlock("4K (Master A)", data.speedpoint_4k) +
+          spBlock("8K (Master B)", data.speedpoint_8k) +
+        '</div>';
+      canApply = !!(
+        (data.speedpoint_4k && !data.speedpoint_4k.error) ||
+        (data.speedpoint_8k && !data.speedpoint_8k.error)
+      );
+    } else {
+      html =
+        '<div class="cal-blocks">' +
+          block("4K (Master A)", data.diagnostic_4k) +
+          block("8K (Master B)", data.diagnostic_8k) +
+        '</div>';
+      var any = data.diagnostic_4k || data.diagnostic_8k;
+      canApply = any && (
+        [data.diagnostic_4k, data.diagnostic_8k].every(function (d) {
+          return !d || d.verdict === "ok" || d.verdict === "lut_fixable" ||
+                 d.verdict === "global_underexposure";
+        })
+      );
+    }
     html += canApply
       ? '<div class="cal-actions"><button type="button" class="btn btn-primary" data-action="cal-apply">Apply &amp; save new FLM</button></div>'
       : '<p class="cal-hint">Resolve the chemistry issue above (longer dev / EI bump) and re-measure before applying.</p>';
@@ -1075,15 +1127,16 @@
 
   async function calApply(panel) {
     var rollId = panel.dataset.rollId;
+    var mode = panel.dataset.calMode || "refinement";
+    var endpoint = (mode === "speed_point")
+      ? "/api/calibration/" + rollId + "/apply-speedpoint"
+      : "/api/calibration/" + rollId + "/apply";
     try {
-      var data = await jsonFetch(
-        "/api/calibration/" + rollId + "/apply",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        },
-      );
+      var data = await jsonFetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
       toast("New FLM saved: " + data.id, "ok");
       location.href = "/film-tables/" + encodeURIComponent(data.id);
     } catch (err) {

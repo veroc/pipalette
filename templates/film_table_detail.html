@@ -6,7 +6,17 @@
   <header class="panel-head">
     <div>
       <div class="crumbs"><a href="{{ url_for('film_tables_page') }}">Film Tables</a> <span>/</span> <span>{{ profile.name }}</span></div>
-      <h1 class="panel-title">{{ profile.name }}</h1>
+      <h1 class="panel-title">
+        {{ profile.name }}
+        {% set cs = profile.cal_state or 'uncalibrated' %}
+        {% if cs == 'uncalibrated' %}
+          <span class="cal-badge cal-badge-uncalibrated" title="No calibration data on this FLM">Uncalibrated</span>
+        {% elif cs == 'speed_point' %}
+          <span class="cal-badge cal-badge-speedpoint" title="Speed point calibrated (sigmoid reference shape)">Speed-point{% if profile.D_sp_4k %}: 4K {{ profile.D_sp_4k }}{% endif %}</span>
+        {% elif cs == 'refined' %}
+          <span class="cal-badge cal-badge-refined" title="Curve refined from full 31-step wedge">Refined</span>
+        {% endif %}
+      </h1>
       <p class="panel-sub">
         {{ profile.camera_type }} <span class="dot-sep">·</span>
         {% if profile.is_bw %}B&amp;W{% if profile.bw_filter_name %} ({{ profile.bw_filter_name }} filter){% endif %}{% else %}Color{% endif %}
@@ -17,9 +27,16 @@
     <div class="panel-actions">
       {% if profile.is_bw and profile.bw_filter in (1, 2, 3) and cal_state == 'none' %}
         <button type="button" class="btn btn-primary"
+                data-action="cal-create-speedpoint-roll"
+                data-profile-id="{{ profile.id }}"
+                title="First-time calibration: find the actual speed-point drive for this film/dev combo">
+          Find speed point
+        </button>
+        <button type="button" class="btn {% if cs == 'uncalibrated' %}btn-ghost btn-disabled{% else %}btn-primary{% endif %}"
                 data-action="cal-create-roll"
-                data-profile-id="{{ profile.id }}">
-          Calibrate
+                data-profile-id="{{ profile.id }}"
+                {% if cs == 'uncalibrated' %}disabled title="Run speed-point calibration first"{% else %}title="Refine the curve shape from a 31-step wedge"{% endif %}>
+          Refine curve
         </button>
       {% endif %}
       <button type="button" class="btn btn-ghost btn-danger" data-action="delete-profile" data-profile-id="{{ profile.id }}">Delete</button>
@@ -110,14 +127,17 @@
          data-roll-id="{{ cal_roll.id }}"
          data-profile-id="{{ profile.id }}"
          data-cal-state="{{ cal_state }}"
+         data-cal-mode="{{ cal_mode or 'refinement' }}"
          data-cal-done-frames="{{ exposed_count }}"
          data-cal-total-frames="{{ cal_roll.frames | length if cal_roll else 35 }}">
   <header class="panel-head">
     <div>
-      <h2 class="panel-title">Calibration in progress</h2>
+      <h2 class="panel-title">
+        {% if cal_mode == 'speed_point' %}Speed-point calibration in progress{% else %}Refinement calibration in progress{% endif %}
+      </h2>
       <p class="panel-sub" data-cal-sub>
         {% if cal_state == 'ready_to_expose' %}
-          Roll prepared, awaiting exposure on the device.
+          {% if cal_mode == 'speed_point' %}Roll prepared with the per-ISO calibration LUT; awaiting exposure on the device.{% else %}Roll prepared, awaiting exposure on the device.{% endif %}
         {% elif cal_state == 'exposing' %}
           Exposing calibration roll — keep the device powered until done.
         {% elif cal_state == 'awaiting_measurements' %}

@@ -216,12 +216,20 @@ def create_app(data_dir=None):
         # hidden from /rolls; the UI on this page is the only entry
         # point to its measurement form + progress display.
         cal_roll = rolls.get_calibration_roll(profile_id)
-        cal_state = _classify_calibration_roll(cal_roll) if cal_roll else "none"
+        cal_roll_state = (_classify_calibration_roll(cal_roll)
+                          if cal_roll else "none")
+        cal_mode = (cal_roll.get("calibration_mode", "refinement")
+                    if cal_roll else None)
         cal_steps_4k = None
         cal_steps_8k = None
         if cal_roll:
-            px = calibration.wedge_pixel_values()
-            cal_steps_4k = [{"index": i + 1, "pixel": p} for i, p in enumerate(px)]
+            if cal_mode == "speed_point":
+                from . import calibration_lut
+                px = calibration_lut.wedge_pixel_values()
+            else:
+                px = calibration.wedge_pixel_values()
+            cal_steps_4k = [{"index": i + 1, "pixel": p}
+                            for i, p in enumerate(px)]
             cal_steps_8k = list(cal_steps_4k)
 
         return render_template(
@@ -235,7 +243,8 @@ def create_app(data_dir=None):
             uploaded_label=_format_timestamp(profile.get("uploaded_at")),
             size_label=_format_bytes(profile.get("size", 0)),
             cal_roll=cal_roll,
-            cal_state=cal_state,
+            cal_state=cal_roll_state,
+            cal_mode=cal_mode,
             cal_steps_4k=cal_steps_4k,
             cal_steps_8k=cal_steps_8k,
         )
@@ -473,14 +482,57 @@ def create_app(data_dir=None):
             return jsonify({"error": str(exc)}), 400
 
         result = {"roll": roll}
-        if len(m4k) >= 5:
-            pairs_4k = sorted(((int(m["pixel"]), float(m["density"])) for m in m4k),
-                              key=lambda t: t[0])
-            result["diagnostic_4k"] = calibration.diagnose(pairs_4k)
-        if len(m8k) >= 5:
-            pairs_8k = sorted(((int(m["pixel"]), float(m["density"])) for m in m8k),
-                              key=lambda t: t[0])
-            result["diagnostic_8k"] = calibration.diagnose(pairs_8k)
+        mode = roll.get("calibration_mode", "refinement")
+        if mode == "speed_point":
+            # Convert (pixel, density) to (drive, density) and report the
+            # recovered D_sp per resolution.  No full curve diagnose --
+            # speed-point only commits to one point.
+            from . import calibration_lut
+            source_id = roll.get("calibration_for")
+            source_profile = (film_tables.profile(source_id)
+                              if source_id else None)
+            iso = source_profile.get("iso") if source_profile else None
+            if iso is None:
+                return jsonify({"error": "source profile has no iso"}), 400
+            drives_4k = calibration_lut.wedge_drives(
+                calibration_lut.predicted_speed_point(iso, "4k"))
+            drives_8k = calibration_lut.wedge_drives(
+                calibration_lut.predicted_speed_point(iso, "8k"))
+
+            def _summarize(meas, drives):
+                pairs = sorted(
+                    (float(drives[int(m["pixel"]) - 1]), float(m["density"]))
+                    for m in meas
+                    if 1 <= int(m["pixel"]) <= len(drives)
+                )
+                if len(pairs) < 4:
+                    return None
+                try:
+                    return {
+                        "D_sp": round(calibration.find_speed_point(pairs), 1),
+                        "b_plus_f": round(min(p[1] for p in pairs), 3),
+                        "d_max": round(max(p[1] for p in pairs), 3),
+                        "patches": len(pairs),
+                        "verdict": "ok",
+                    }
+                except ValueError as e:
+                    return {"error": str(e), "verdict": "wedge_off_target"}
+
+            if m4k:
+                result["speedpoint_4k"] = _summarize(m4k, drives_4k)
+            if m8k:
+                result["speedpoint_8k"] = _summarize(m8k, drives_8k)
+        else:
+            if len(m4k) >= 5:
+                pairs_4k = sorted(((int(m["pixel"]), float(m["density"]))
+                                   for m in m4k),
+                                  key=lambda t: t[0])
+                result["diagnostic_4k"] = calibration.diagnose(pairs_4k)
+            if len(m8k) >= 5:
+                pairs_8k = sorted(((int(m["pixel"]), float(m["density"]))
+                                   for m in m8k),
+                                  key=lambda t: t[0])
+                result["diagnostic_8k"] = calibration.diagnose(pairs_8k)
         return jsonify(result)
 
     @app.route("/api/calibration/<roll_id>/apply", methods=["POST"])
