@@ -1,28 +1,28 @@
 """Per-ISO calibration LUT for speed-point calibration.
 
-During speed-point calibration the roll is exposed through THIS LUT
-instead of the user's target FLM, so the drive at each wedge patch is
-deterministic and independent of whatever curve the wizard placed.
+The calibration LUT is a simple linear ramp:
 
-The LUT is constructed per-ISO at roll-creation time: pixel values
-1..N_PATCHES are mapped directly to N_PATCHES log-spaced drives
-spanning ±2 stops around the predicted speed-point drive for the
-labeled ISO.  Pixel 0 stays at drive 0 (black background); pixels
-N_PATCHES+1..255 hold the last drive (capped) so the file is a valid
-monotone LUT.
+    stored[i] = i   (i = 0..255)
+    scale_r   = K_iso       =>  drive(pixel) = K_iso * pixel
 
-Predicted speed-point drives (reference, ISO 100):
-    Master A (Set 7, 4K):  drive 150
-    Master B (Set 9, 8K):  drive  38
+The wedge samples 24 evenly-spaced pixel values from 0 to 255, giving
+24 evenly-spaced DRIVES from 0 to K_iso*255.  No predicted-speed-point
+centring -- the wedge always covers the full plausible drive range and
+finds the speed-point density crossing wherever it lands.
 
-For other ISOs both predicted drives scale by 100/iso (slower films
-need proportionally more drive to land the speed point).
+Why linear (not log-spaced like an earlier draft):  Mode A only needs
+to land the LUT within ~50% of the true D_sp.  Mode B refines from
+there.  Linear-ramp precision near the speed point is ~15-25% which is
+ample, and the design carries no prediction-dependency: the wedge
+brackets D_sp for any film whose actual speed is within the range
+0..K_iso*255.
 
-This way every wedge patch's drive is known exactly at roll-creation
-time and stored on the roll's snapshotted profile.flm.
+K_iso table -- picked so max drive at pixel 255 stays well under the
+~3000 halation threshold we've observed on real hardware at ISO 100,
+while still reaching ~10x the predicted speed-point drive (giving
+generous coverage for films that are 2 stops slower than expected).
+For other ISOs, K scales by 100/iso (slower films need higher drives).
 """
-
-import math
 
 import pp8k
 
@@ -30,85 +30,78 @@ from . import wizard_baselines
 
 
 N_PATCHES = 24
-HALF_RANGE_LOG = 2.0 * math.log(2.0)  # ±2 stops in natural log
-
-# Reference predicted speed-point drives at ISO 100.  Both come from
-# round-2 Foma calibration (Master A peak / 84 -> ~150;
-# Master B peak / 94 -> ~38).
-D_SP_4K_REF = 150.0
-D_SP_8K_REF = 38.0
-REF_ISO = 100.0
-
 INTERNAL_NAME = "PIPALCAL"
 DISPLAY_NAME_TEMPLATE = "piPalette cal {iso}"
 
+# K factor at 4K per labeled ISO.  Max drive at pixel 255 = K * 255.
+K_BY_ISO_4K = {
+    25:  32,   # max drive 8160
+    50:  16,   # max drive 4080
+    100:  8,   # max drive 2040
+    200:  4,   # max drive 1020
+    400:  2,   # max drive  510
+    800:  1,   # max drive  255
+}
 
-def predicted_speed_point(iso, resolution):
-    """Predicted speed-point drive for the labeled ISO at the requested
-    resolution ('4k' or '8k').  Reference values scaled by 100/iso."""
-    factor = REF_ISO / float(iso)
+# K factor at 8K -- typically 1/4 of 4K (firmware draws 4x more
+# scanlines at 8K so each line needs 1/4 the drive).  Clamped to a
+# minimum of 1 for fast ISOs where 4K/4 isn't an integer.
+K_BY_ISO_8K = {
+    25:  8,
+    50:  4,
+    100: 2,
+    200: 1,
+    400: 1,
+    800: 1,
+}
+
+
+def scale_for(iso, resolution):
+    """Return K (the LUT's scale_r) for the given ISO + resolution."""
     if resolution == "4k":
-        return D_SP_4K_REF * factor
+        return K_BY_ISO_4K[iso]
     if resolution == "8k":
-        return D_SP_8K_REF * factor
+        return K_BY_ISO_8K[iso]
     raise ValueError(f"unknown resolution {resolution!r}")
 
 
-def wedge_drives(D_center, n=N_PATCHES):
-    """N log-spaced drives spanning ±2 stops around D_center."""
+def wedge_pixel_values(n=N_PATCHES):
+    """N evenly-spaced pixel values from 0 to 255 inclusive."""
     if n < 2:
         raise ValueError("n must be >= 2")
-    step = 2.0 * HALF_RANGE_LOG / (n - 1)
-    return tuple(
-        D_center * math.exp(-HALF_RANGE_LOG + i * step) for i in range(n)
-    )
+    return tuple(round(i * 255 / (n - 1)) for i in range(n))
 
 
-def wedge_pixel_values(n=N_PATCHES):
-    """Pixel values used by the wedge -- one pixel per patch, starting
-    at pixel 1 (pixel 0 stays black)."""
-    return tuple(range(1, n + 1))
+def wedge_drives(iso, resolution, n=N_PATCHES):
+    """Drives produced by the calibration LUT at each wedge patch."""
+    K = scale_for(iso, resolution)
+    return tuple(K * p for p in wedge_pixel_values(n))
 
 
-def _stored_for_drives(drives, n=N_PATCHES):
-    """Build a 256-entry stored array: stored[0] = 0, stored[1..n] =
-    round(drives), stored[n+1..255] = stored[n].  Clamped to u16."""
-    a = [0] * 256
-    for i in range(n):
-        a[i + 1] = max(0, min(0xFFFF, round(drives[i])))
-    for i in range(n + 1, 256):
-        a[i] = a[n]
-    return tuple(a)
-
-
-def build_calibration_flm_bytes(template_table, iso, n=N_PATCHES):
-    """Serialize a calibration FLM tuned for the given labeled ISO.
+def build_calibration_flm_bytes(template_table, iso):
+    """Serialize a per-ISO calibration FLM (linear ramp, K-scaled).
 
     Camera metadata mirrors the template (the user's target table).
-    LUT shape is a step ramp where pixel i (i=1..n) carries the
-    drive needed to land at a specific log-spaced position ±2 stops
-    around the predicted speed-point drive for that ISO/resolution.
+    LUT shape is a linear ramp 0..255 stored, with scale_r per
+    resolution: K_4K on Set 7 (Master A), K_8K on Set 9 (Master B).
     """
-    D_sp_4k = predicted_speed_point(iso, "4k")
-    D_sp_8k = predicted_speed_point(iso, "8k")
-    drives_4k = wedge_drives(D_sp_4k, n)
-    drives_8k = wedge_drives(D_sp_8k, n)
-
-    stored_a = _stored_for_drives(drives_4k, n)
-    stored_b = _stored_for_drives(drives_8k, n)
+    linear_stored = tuple(range(256))
+    half = tuple((v + 1) >> 1 for v in linear_stored)
+    double = tuple(min(0xFFFF, v * 2) for v in linear_stored)
 
     # 2-master invariant.
-    half_a = tuple((v + 1) >> 1 for v in stored_a)
-    double_b = tuple(min(0xFFFF, v * 2) for v in stored_b)
     per_set_stored = (
-        stored_a, half_a, stored_a, half_a, stored_a, half_a,
-        stored_a, stored_a, double_b, stored_b,
+        linear_stored, half, linear_stored, half, linear_stored, half,
+        linear_stored, linear_stored, double, linear_stored,
     )
 
-    # scale = 1 for both masters: stored values already ARE the drives,
-    # no further multiplication needed on the firmware side.
-    base = 1
-    SET0_R = wizard_baselines._SET0_R_SCALE_CONSTANT  # CFR convention
+    K_4k = K_BY_ISO_4K[iso]
+    K_8k = K_BY_ISO_8K[iso]
+    # base scale for the FLM header.  Set 7 (Master A) overrides this
+    # to K_4k via its header byte; Set 9 (Master B) overrides to K_8k.
+    # Other resolutions inherit base + the wizard's per-set offsets.
+    base = K_4k
+    SET0_R = wizard_baselines._SET0_R_SCALE_CONSTANT
 
     def header(set_index, scale_r):
         if set_index == 0:
@@ -123,7 +116,11 @@ def build_calibration_flm_bytes(template_table, iso, n=N_PATCHES):
 
     sets = []
     for i in range(10):
-        if i == 0:
+        if i == 9:
+            scale = K_8k
+        elif i == 7:
+            scale = K_4k
+        elif i == 0:
             scale = SET0_R
         else:
             scale = base + wizard_baselines._R_SCALE_OFFSET_PER_SET[i]

@@ -274,37 +274,45 @@ def find_speed_point(measurements, sp_offset=SPEED_POINT_OFFSET):
     """Find the drive level where density crosses b+f + sp_offset.
 
     Args:
-        measurements: sequence of (drive, density) pairs in increasing
-            drive order.  Drives are absolute display-space values
-            (the calibration LUT applies them directly without
-            further scaling per-pixel).
+        measurements: sequence of (drive, density) pairs.  Drive values
+            are absolute display-space drives.  A measurement at drive=0
+            is accepted and used as the b+f anchor (it doesn't enter the
+            log-space interpolation since log(0) is undefined).
         sp_offset: density above b+f that defines the speed point
             (ISO 6:1993 -> 0.10).
 
     Returns: speed-point drive (float).
-    Raises ValueError if the speed-point density is outside the
-    measured range -- caller should bracket the wedge differently.
+    Raises ValueError if the wedge doesn't bracket the speed point.
     """
     if len(measurements) < 4:
         raise ValueError("need at least 4 measurements")
-    drives = [float(m[0]) for m in measurements]
-    densities = [float(m[1]) for m in measurements]
-    if drives != sorted(drives):
-        raise ValueError("measurements must be in increasing drive order")
-    if drives[0] <= 0:
-        raise ValueError("first drive must be > 0 (cannot take log of zero)")
+    sorted_meas = sorted((float(m[0]), float(m[1])) for m in measurements)
+    if sorted_meas[0][0] < 0:
+        raise ValueError("drives must be >= 0")
 
-    b_plus_f = min(densities)
+    # Separate the drive=0 anchor (if present) -- it gives us b+f but
+    # can't take part in log-drive interpolation.
+    if sorted_meas[0][0] == 0:
+        b_plus_f = sorted_meas[0][1]
+        positive = sorted_meas[1:]
+    else:
+        b_plus_f = min(d for _, d in sorted_meas)
+        positive = sorted_meas
+    if len(positive) < 3:
+        raise ValueError("need at least 3 positive-drive measurements")
+
     target = b_plus_f + sp_offset
-
+    drives = [m[0] for m in positive]
+    densities = [m[1] for m in positive]
     # Running-max smoothing so a noisy reading doesn't push the speed
     # point past where the film actually crossed it.
     smooth = _running_max(densities)
 
     if target < smooth[0]:
         raise ValueError(
-            f"speed-point density {target:.3f} below lowest measured "
-            f"{smooth[0]:.3f} -- wedge starts too hot (drives too high)"
+            f"speed-point density {target:.3f} below lowest positive-drive "
+            f"measurement {smooth[0]:.3f} at drive {drives[0]:.0f} -- film "
+            f"is faster than the wedge covers; try a higher labeled ISO"
         )
     if target > smooth[-1]:
         raise ValueError(
@@ -323,8 +331,6 @@ def find_speed_point(measurements, sp_offset=SPEED_POINT_OFFSET):
                 return drives[i]
             t = (target - d0) / (d1 - d0)
             return math.exp(l0 + t * (l1 - l0))
-    # Fallthrough only if smooth is non-monotonic past the running_max
-    # call, which is impossible by construction.
     raise AssertionError("unreachable: target bracketed but not found")
 
 
@@ -732,12 +738,14 @@ def create_speedpoint_roll(rolls_store, film_tables, profile_id):
     )
 
     # 1. Identification frame -- subtitled for the speed-point flow.
+    K_4k = calibration_lut.scale_for(iso, "4k")
+    K_8k = calibration_lut.scale_for(iso, "8k")
     id_bytes = _render_identification_image(
         profile,
         mode_label="SPEED-POINT CALIBRATION",
         wedge_legend=[
-            f"4K WEDGE:    frames 02..13  (24 patches, +-2 stops around predicted ISO {iso} D_sp)",
-            f"8K WEDGE:    frames 14..25  (24 patches, +-2 stops around predicted ISO {iso} D_sp)",
+            f"4K WEDGE:    frames 02..13  (24 patches, linear ramp 0..{K_4k*255})",
+            f"8K WEDGE:    frames 14..25  (24 patches, linear ramp 0..{K_8k*255})",
             "REFERENCES:  frames 26..27  (LINEAR + sRGB print test ramps)",
         ],
     )

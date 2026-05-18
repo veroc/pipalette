@@ -484,9 +484,8 @@ def create_app(data_dir=None):
         result = {"roll": roll}
         mode = roll.get("calibration_mode", "refinement")
         if mode == "speed_point":
-            # Convert (pixel, density) to (drive, density) and report the
-            # recovered D_sp per resolution.  No full curve diagnose --
-            # speed-point only commits to one point.
+            # Linear-ramp calibration LUT: drive = K_res * pixel.
+            # Report recovered D_sp per resolution; no full-curve diagnose.
             from . import calibration_lut
             source_id = roll.get("calibration_for")
             source_profile = (film_tables.profile(source_id)
@@ -494,16 +493,14 @@ def create_app(data_dir=None):
             iso = source_profile.get("iso") if source_profile else None
             if iso is None:
                 return jsonify({"error": "source profile has no iso"}), 400
-            drives_4k = calibration_lut.wedge_drives(
-                calibration_lut.predicted_speed_point(iso, "4k"))
-            drives_8k = calibration_lut.wedge_drives(
-                calibration_lut.predicted_speed_point(iso, "8k"))
+            K_4k = calibration_lut.scale_for(iso, "4k")
+            K_8k = calibration_lut.scale_for(iso, "8k")
 
-            def _summarize(meas, drives):
+            def _summarize(meas, K):
                 pairs = sorted(
-                    (float(drives[int(m["pixel"]) - 1]), float(m["density"]))
+                    (float(K * int(m["pixel"])), float(m["density"]))
                     for m in meas
-                    if 1 <= int(m["pixel"]) <= len(drives)
+                    if int(m["pixel"]) >= 0
                 )
                 if len(pairs) < 4:
                     return None
@@ -519,9 +516,9 @@ def create_app(data_dir=None):
                     return {"error": str(e), "verdict": "wedge_off_target"}
 
             if m4k:
-                result["speedpoint_4k"] = _summarize(m4k, drives_4k)
+                result["speedpoint_4k"] = _summarize(m4k, K_4k)
             if m8k:
-                result["speedpoint_8k"] = _summarize(m8k, drives_8k)
+                result["speedpoint_8k"] = _summarize(m8k, K_8k)
         else:
             if len(m4k) >= 5:
                 pairs_4k = sorted(((int(m["pixel"]), float(m["density"]))
@@ -657,31 +654,27 @@ def create_app(data_dir=None):
         if iso is None:
             return jsonify({"error": "source profile has no iso"}), 400
 
-        # Convert (pixel, density) to (drive, density) per resolution
-        # using the calibration LUT's known patch drives.  Pixel value
-        # i corresponds to the i-th log-spaced wedge drive.
-        drives_4k = calibration_lut.wedge_drives(
-            calibration_lut.predicted_speed_point(iso, "4k"))
-        drives_8k = calibration_lut.wedge_drives(
-            calibration_lut.predicted_speed_point(iso, "8k"))
+        # Convert (pixel, density) to (drive, density) per resolution.
+        # Calibration LUT is a linear ramp: drive = K_res * pixel.
+        # Pixel 0 (drive 0) is preserved -- find_speed_point uses it as
+        # the b+f anchor.
+        K_4k = calibration_lut.scale_for(iso, "4k")
+        K_8k = calibration_lut.scale_for(iso, "8k")
 
-        def _to_drive_pairs(measurements, drives):
+        def _to_drive_pairs(measurements, K):
             pairs = []
             for m in measurements:
                 pixel = int(m["pixel"])
-                # patch index = pixel value (1..N_PATCHES); drives[i] is
-                # for patch i+1.  Pixels outside the patch range are
-                # dropped (caller probably picked the wrong wedge).
-                if 1 <= pixel <= len(drives):
-                    pairs.append((float(drives[pixel - 1]),
-                                  float(m["density"])))
+                if pixel < 0:
+                    continue
+                pairs.append((float(K * pixel), float(m["density"])))
             pairs.sort(key=lambda t: t[0])
             return pairs
 
         pairs_4k = _to_drive_pairs(
-            (m for m in meas if m.get("resolution") == "4k"), drives_4k)
+            (m for m in meas if m.get("resolution") == "4k"), K_4k)
         pairs_8k = _to_drive_pairs(
-            (m for m in meas if m.get("resolution") == "8k"), drives_8k)
+            (m for m in meas if m.get("resolution") == "8k"), K_8k)
         if len(pairs_4k) < 4 and len(pairs_8k) < 4:
             return jsonify({
                 "error": "need at least 4 measurements per resolution"

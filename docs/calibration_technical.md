@@ -6,6 +6,10 @@ user-facing parts of the manual.
 
 Last updated: 2026-05-18.
 
+> **Revision note (same day):** the speed-point wedge was simplified from
+> a log-spaced ±2-stop wedge centred on a *predicted* speed-point drive
+> to a plain linear ramp 0..K·255 per ISO. Reasons in §2.1.
+
 ---
 
 ## 1. The problem
@@ -51,18 +55,57 @@ target film is 2 stops slower than expected (different dev).
 **Purpose:** locate the drive that produces speed-point density on this
 specific film/dev combo. One round, no curve fitting.
 
-**How:**
+#### 2.1 Wedge — linear ramp 0..K·255
 
-1. The roll is exposed through a **per-ISO calibration LUT**
-   (`pipalette/calibration_lut.py`), not the user's target FLM. The
-   calibration LUT encodes 24 log-spaced drives at pixel values 1..24,
-   spanning ±2 stops around the predicted speed-point drive for the
-   labeled ISO. Drives are *known* at roll-creation time — they don't
-   depend on whatever curve the wizard happened to place.
-2. The user develops the roll and reads each patch's density.
-3. `find_speed_point` interpolates in log-drive space to find the drive
-   where measured density crosses `b+f + 0.10`.
-4. `place_shape(D_sp, target_range)` builds a 256-LUT anchored at that
+The roll is exposed through a **per-ISO calibration LUT**
+(`pipalette/calibration_lut.py`), not the user's target FLM. The LUT is
+a plain linear ramp:
+
+```
+stored[i] = i              (i = 0..255)
+scale_r   = K_iso          → drive(pixel) = K_iso · pixel
+```
+
+`K_iso` scales by `100/iso` so the same wedge layout works at every
+labeled ISO. Picked so max drive at pixel 255 stays well under the
+~3000 halation threshold at ISO 100 and reaches ~10× the predicted
+speed-point drive (generous coverage for films that are 2 stops slower
+than expected):
+
+| ISO | K_4K | K_8K | max drive 4K |
+|---|---|---|---|
+| 25 | 32 | 8 | 8160 |
+| 50 | 16 | 4 | 4080 |
+| 100 | 8 | 2 | 2040 |
+| 200 | 4 | 1 | 1020 |
+| 400 | 2 | 1 | 510 |
+| 800 | 1 | 1 | 255 |
+
+24 wedge patches sample evenly-spaced pixel values 0..255 (step ~11).
+Patch 1 sits at pixel 0 → drive 0 (no exposure, gives the b+f anchor).
+Other patches sample drives 0..K·255 in equal steps.
+
+**Why linear (not log-spaced like an earlier draft).** Mode A doesn't
+need high precision — it only needs to land the LUT within ~50% of the
+true D_sp so Mode B has good toe coverage. Linear-ramp precision near
+the speed point is ~15-25% which is ample, and the design carries no
+prediction-dependency: the wedge brackets D_sp for any film whose
+actual speed lies inside 0..K·255. Log-spacing was over-engineering.
+
+**Tradeoff:** if a film is much faster than its labeled ISO (>2 stops),
+the first positive-drive patch may already overshoot the speed point.
+`find_speed_point` detects this and raises a clear error pointing the
+user at a higher labeled ISO. Films faster than ~1.5 stops beyond
+expectation are rare in practice; if encountered, change the wizard
+ISO and re-run.
+
+#### 2.2 Apply
+
+1. The user develops the roll and reads each patch's density.
+2. `find_speed_point` uses the drive=0 density as the b+f anchor and
+   interpolates in log-drive space among the positive-drive
+   measurements to find the drive that produces `b+f + 0.10`.
+3. `place_shape(D_sp, target_range)` builds a 256-LUT anchored at that
    drive, using a parametric sigmoid as the assumed film response shape.
 
 The output FLM is marked `cal_state=speed_point`.
@@ -137,33 +180,43 @@ L_rel(target_D) = L_50 - K · ln(DMAX / target_D - 1)
 
 ### 3.2 `find_speed_point(measurements)`
 
-Inputs: a list of `(drive, density)` pairs in increasing drive order
-(typically 24 of them, the speed-point wedge measurements).
+Inputs: a list of `(drive, density)` pairs in any order (typically 24,
+the speed-point wedge measurements). A pair with `drive == 0` is
+accepted and used as the b+f anchor.
 
-1. `b+f = min(densities)`. Target density = `b+f + 0.10`.
-2. Apply a running-max to densities so a noisy reading can't drop the
-   curve below an earlier value.
-3. Locate the bracket `[i, i+1]` where `densities[i] ≤ target ≤
-   densities[i+1]`.
-4. Linearly interpolate in log-drive space inside that bracket:
+1. Sort by drive. If the first pair has `drive == 0`, take its density
+   as **b+f** and drop the pair from the log-interpolation list;
+   otherwise b+f = min of all densities.
+2. Target density = `b+f + 0.10`.
+3. Apply running-max smoothing to the positive-drive densities so a
+   noisy reading can't drop the curve below an earlier value.
+4. Locate the bracket `[i, i+1]` where `smooth[i] ≤ target ≤
+   smooth[i+1]`.
+5. Linearly interpolate in log-drive space inside that bracket:
    ```
    t = (target - d_i) / (d_{i+1} - d_i)
    log(D_sp) = log(drives[i]) + t · (log(drives[i+1]) - log(drives[i]))
    ```
-5. Return `exp(log(D_sp))`.
+6. Return `exp(log(D_sp))`.
 
-Raises `ValueError` if the speed-point density is outside the measured
-range — that's the "wedge didn't bracket the speed point" signal, which
-the API surfaces to the UI as a re-bracket prompt.
+Raises `ValueError` if:
+- the speed-point density is below the lowest positive-drive reading
+  (the film is faster than the wedge covers; recover by raising the
+  labeled ISO);
+- the speed-point density is above the highest reading (the wedge
+  tops out below speed point — rare with this LUT design; means the
+  film responds very slowly).
 
-Recovery error in synthetic round-trips:
+Recovery error in synthetic round-trips (linear wedge, ISO 100, true
+D_sp varied):
 
-| true vs predicted D_sp | recovered error |
+| true D_sp (stops from predicted=150) | recovered error |
 |---|---|
-| same | < 2% |
-| 1 stop slow | ~3% |
-| 2 stops slow | wedge tops out, ValueError |
-| 2 stops fast | ~20% (sparse low-end samples) |
+| 0   (D_sp = 150–180) | < 10% |
+| -1  (D_sp = 75)      | < 10% |
+| +1  (D_sp = 300)     | < 5%  |
+| +2  (D_sp = 600–720) | < 10% |
+| -2  (D_sp ≈ 40)      | **ValueError** with "try higher labeled ISO" |
 
 ### 3.3 `place_shape(D_sp, target_range)`
 
@@ -235,18 +288,17 @@ static/calibration/reference/{linear,srgb}_35mm-3x2-4k.png
 
 For labeled ISO `X`:
 
-- `D_sp_4k_predicted = 150 · (100 / X)` (4K speed point at ISO 100 ≈ 150)
-- `D_sp_8k_predicted = 38 · (100 / X)` (1/4 of the 4K drive)
-- 24 log-spaced drives, ±2 stops around each predicted value
-- LUT stored values at pixel `i` (1..24) = the i-th drive directly
-  (scale 1, no multiplication on firmware side)
-- Pixel 0 = 0 (black background); pixels 25..255 cap at the last drive
+- LUT is a plain linear ramp: `stored[i] = i` for `i = 0..255`.
+- `scale_r` per resolution: `K_4K` on Set 7 (Master A), `K_8K` on Set 9
+  (Master B). `K_4K = 8 · (100 / X)` (rounded to integer min 1);
+  `K_8K = K_4K / 4` (rounded up to min 1).
+- Drive at pixel `p` = `K_res · p`.
 
 Two-master invariant preserved (`stored_a` repeated at Sets 0/2/4/6/7,
 `half_a` at 1/3/5, `2 · stored_b` at 8, `stored_b` at 9) so the file
 passes `pp8k.validate_masters`. Per-set headers carry the per-set
-scale_r byte that pp8k reads on load — Set 9 needs an explicit override
-since it uses a different scale than the rest.
+scale_r byte that pp8k reads on load — Sets 7 and 9 each need explicit
+header overrides since they use different scales than the rest.
 
 ### 4.2 Wedge rendering
 
@@ -312,17 +364,12 @@ The detail page reads this off the roll to choose:
 
 `wizard_baselines.MASTER_A_DISPLAY` and `MASTER_B_DISPLAY` are no longer
 static tuples but `calibration_shape.place_shape()` calls evaluated at
-module import. The placeholder is anchored at the predicted ISO-100
-speed-point drives (150 / 38) — **deliberately the same** as the
-calibration LUT's wedge center, so:
-
-- a new ISO 100 wizard FLM's pixel 25 lands at drive 150,
-- the speed-point wedge's center patch (pixel 12) also lands at drive
-  150,
-
-which means the wedge perfectly brackets the placeholder's predicted
-speed point. If the actual film+dev combo lands within ±2 stops of the
-prediction (always true in practice), the wedge bracket holds.
+module import. The placeholder is anchored at predicted ISO-100
+speed-point drives (D_sp_4k = 150, D_sp_8k = 38). At other ISOs it
+scales by `100/iso`. Speed-point calibration's wedge covers the
+0..K_iso·255 drive range — well over the placeholder's speed point —
+so the wedge always brackets the actual D_sp of any film labeled at
+the right ISO.
 
 ---
 
@@ -355,14 +402,15 @@ data yet. Films outside the wizard ISO bracket (e.g., ISO 6 or 3200) are
 *not* supported because the calibration LUT can't encode their predicted
 drives in u16 without rescaling the stored→display mapping.
 
-### 5.4 Asymmetric speed-point cases
+### 5.4 Ultra-fast film recovery
 
-`find_speed_point` returns `ValueError` if the wedge doesn't bracket the
-speed point — the UI surfaces this as "wedge tops out too low" or "wedge
-starts too hot". Currently the only remedy is to switch the labeled ISO
-of the target FLM and re-shoot. A wider wedge (±3 stops, 36 patches)
-would handle this in one shot at the cost of one frame's worth of
-roll space — possibly worth doing when it happens routinely.
+`find_speed_point` raises `ValueError` if the speed-point density is
+below the lowest positive-drive measurement — the film is much faster
+than the wedge covers. Currently the only remedy is to switch the
+labeled ISO and re-shoot. Possible future improvement: detect this
+condition at apply time and offer an automatic ISO-label-bump path
+(create a new wizard FLM at the higher ISO with the same name suffix,
+copy the calibration roll's results forward).
 
 ### 5.5 8K Master B derivation
 

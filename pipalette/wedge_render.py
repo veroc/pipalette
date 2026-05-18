@@ -80,18 +80,22 @@ def frame_count():
     return (calibration_lut.N_PATCHES + 1) // 2
 
 
+def _patch_pixels():
+    """Pixel values used by the calibration LUT, indexed by patch number
+    minus 1."""
+    return calibration_lut.wedge_pixel_values()
+
+
 def _patch_pixel(idx):
-    """Pixel value used by the calibration LUT to address patch `idx`
-    (1-based).  Mirrors calibration_lut.wedge_pixel_values."""
+    """Pixel value for patch `idx` (1-based)."""
     if idx is None:
         return None
-    return idx  # patches sit at pixel values 1..N_PATCHES
+    return _patch_pixels()[idx - 1]
 
 
 def _patch_drives(iso, resolution):
     """Drives produced by the calibration LUT at each patch, in order."""
-    D_center = calibration_lut.predicted_speed_point(iso, resolution)
-    return calibration_lut.wedge_drives(D_center)
+    return calibration_lut.wedge_drives(iso, resolution)
 
 
 def frame_pairs():
